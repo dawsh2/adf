@@ -1,0 +1,72 @@
+# Editor temp files
+*#
+.#*
+
+# OS junk
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Icon?
+Desktop.ini
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.pyo
+*.pyd
+*.log
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+pip-wheel-metadata/
+
+# VSCode
+.vscode/
+.code-workspace
+
+# JetBrains (PyCharm, etc.)
+.idea/
+
+# Jupyter
+.ipynb_checkpoints
+
+# Test output
+htmlcov/
+.tox/
+.nox/
+.coverage
+coverage.xml
+.cache/
+pytest_cache/
+
+# MyPy
+.mypy_cache/
+
+# Bandit
+bandit.yaml
+
+# Mac/Linux user files
+*.swp
+*.swo
+*~
+
+# Node stuff (in case mixed tech)
+node_modules/
+
+# Environment variables or secrets
+.env
+.env.*
+
+# Backup files
+*.bak
+*.tmp
+*.orig
+*.old
