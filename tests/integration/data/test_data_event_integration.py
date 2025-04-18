@@ -75,15 +75,18 @@ def create_test_data(temp_dir, symbols=None, days=30):
             price = prices[i]
             daily_range = price * 0.02  # 2% daily range
             
-            df.iloc[i]['open'] = price - daily_range/4 + np.random.uniform(-daily_range/8, daily_range/8)
-            df.iloc[i]['high'] = price + daily_range/2 + np.random.uniform(0, daily_range/4)
-            df.iloc[i]['low'] = price - daily_range/2 - np.random.uniform(0, daily_range/4)
-            df.iloc[i]['close'] = price + np.random.uniform(-daily_range/4, daily_range/4)
-            df.iloc[i]['volume'] = int(np.random.uniform(1000, 10000))
+            # Fixed: Use proper Pandas assignment
+            df.loc[df.index[i], 'open'] = price - daily_range/4 + np.random.uniform(-daily_range/8, daily_range/8)
+            df.loc[df.index[i], 'high'] = price + daily_range/2 + np.random.uniform(0, daily_range/4)
+            df.loc[df.index[i], 'low'] = price - daily_range/2 - np.random.uniform(0, daily_range/4)
+            df.loc[df.index[i], 'close'] = price + np.random.uniform(-daily_range/4, daily_range/4)
+            df.loc[df.index[i], 'volume'] = int(np.random.uniform(1000, 10000))
         
-        # Save to CSV
+        # Save to CSV - Make sure to save with the date column
+        # Fix: Create the filename before using it
         filename = os.path.join(temp_dir, f"{symbol}_1d.csv")
-        df.to_csv(filename, index=True)
+        # Ensure the date column is saved properly by saving the index
+        df.to_csv(filename, index=True, index_label='date')
         
         # Store dataframe
         df_dict[symbol] = df
@@ -404,16 +407,16 @@ class TestStrategyEventIntegration(unittest.TestCase):
                 noise = np.random.uniform(-1.0, 1.0)
                 price += noise
                 
-                # Fill OHLC values
-                df.iloc[day]['open'] = price - 0.5
-                df.iloc[day]['high'] = price + 1.0
-                df.iloc[day]['low'] = price - 1.0
-                df.iloc[day]['close'] = price + 0.5
-                df.iloc[day]['volume'] = int(np.random.uniform(1000, 10000))
+                # Fill OHLC values - Fixed: Use proper Pandas assignment
+                df.loc[df.index[day], 'open'] = price - 0.5
+                df.loc[df.index[day], 'high'] = price + 1.0
+                df.loc[df.index[day], 'low'] = price - 1.0
+                df.loc[df.index[day], 'close'] = price + 0.5
+                df.loc[df.index[day], 'volume'] = int(np.random.uniform(1000, 10000))
             
-            # Save to CSV
+            # Save to CSV - Fixed: Save with index as 'date' column
             filename = os.path.join(self.temp_dir.name, f"{symbol}_1d.csv")
-            df.to_csv(filename, index=True)
+            df.to_csv(filename, index=True, index_label='date')
         
         # Create event system
         self.event_bus = EventBus()
