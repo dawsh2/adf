@@ -1,0 +1,28 @@
+#!/bin/bash
+# Run all tests for the event system
+
+# Get the directory of this script
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+
+# Make sure we're in the project root directory
+cd "$SCRIPT_DIR"
+
+# Create __init__.py in tests directory if it doesn't exist
+if [ ! -f "tests/__init__.py" ]; then
+    echo "Creating tests/__init__.py"
+    touch tests/__init__.py
+fi
+
+# Print the list of test files for debugging
+echo "Available test files:"
+ls -la tests/*.py
+
+# Run the basic event system tests
+echo "Running basic event system tests..."
+python -m unittest tests.test_events
+
+# Run specific async tests directly rather than relying on discovery
+echo "Running async event system tests..."
+python -m unittest tests.test_async_events.TestAsyncEventBus tests.test_async_events.TestAsyncEventHandlers tests.test_async_events.TestAsyncEventManager tests.test_async_events.TestEventSerialization
+
+echo "All tests completed."

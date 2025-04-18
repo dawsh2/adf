@@ -1,0 +1,142 @@
+#!/bin/bash
+
+# Script to create the directory structure and files for the Algorithmic Trading System
+# Run this script from the project root directory (~/adf)
+
+# Exit on error
+set -e
+
+# Create main directory if it doesn't exist
+mkdir -p ~/adf
+
+# Navigate to project root
+cd ~/adf
+
+echo "Creating directory structure for Algorithmic Trading System..."
+
+# Core Module
+mkdir -p core/config core/events core/logging
+
+# Data Module
+mkdir -p data/sources data/transformers
+
+# Models Module
+mkdir -p models/components/indicators models/components/features models/components/rules
+mkdir -p models/filters/regime models/ml models/rl models/factor
+mkdir -p models/optimization/validation
+
+# Strategy Module
+mkdir -p strategy/strategies strategy/strategy_manager strategy/risk
+
+# Execution Module
+mkdir -p execution/backtest execution/live
+
+# Analytics Module
+mkdir -p analytics
+
+# Create __init__.py files in all directories
+find . -type d -exec touch {}/__init__.py \;
+
+echo "Creating core module files..."
+
+# Core module files
+touch core/config/config_manager.py
+touch core/config/defaults.py
+touch core/logging/logger.py
+
+# Events module files
+touch core/events/event_types.py
+touch core/events/event_bus.py
+touch core/events/event_utils.py
+touch core/events/event_schema.py
+touch core/events/event_emitters.py
+touch core/events/event_handlers.py
+touch core/events/event_manager.py
+
+echo "Creating data module files..."
+
+# Data module files
+touch data/data_handler_base.py
+touch data/data_source_base.py
+touch data/factory.py
+touch data/registry.py
+touch data/sources/csv_handler.py
+touch data/sources/api_handler.py
+touch data/sources/db_handler.py
+touch data/transformers/resampler.py
+touch data/transformers/normalizer.py
+
+echo "Creating models module files..."
+
+# Models module files
+touch models/components/base.py
+touch models/components/factory.py
+touch models/components/registry.py
+touch models/components/indicators/moving_averages.py
+touch models/components/indicators/oscillators.py
+touch models/components/indicators/trend.py
+touch models/components/indicators/volatility.py
+touch models/components/features/price_features.py
+touch models/components/features/technical_features.py
+touch models/components/rules/crossover.py
+touch models/components/rules/oscillator.py
+touch models/components/rules/trend.py
+touch models/filters/filter_base.py
+touch models/filters/regime/detector.py
+touch models/filters/regime/regime_strategy.py
+touch models/filters/time_filters.py
+touch models/filters/volatility_filters.py
+touch models/ml/classifiers.py
+touch models/ml/regressors.py
+touch models/ml/features.py
+touch models/rl/agents.py
+touch models/rl/environments.py
+touch models/factor/factor_models.py
+touch models/optimization/optimizer_base.py
+touch models/optimization/optimizer_manager.py
+touch models/optimization/grid_search.py
+touch models/optimization/genetic.py
+touch models/optimization/walk_forward.py
+touch models/optimization/validation/cross_val.py
+touch models/optimization/validation/metrics.py
+
+echo "Creating strategy module files..."
+
+# Strategy module files
+touch strategy/strategy_base.py
+touch strategy/factory.py
+touch strategy/registry.py
+touch strategy/strategies/ma_crossover.py
+touch strategy/strategies/momentum.py
+touch strategy/strategies/mean_reversion.py
+touch strategy/strategy_manager/manager_base.py
+touch strategy/strategy_manager/regime_manager.py
+touch strategy/strategy_manager/meta_strategy.py
+touch strategy/risk/position_sizer.py
+touch strategy/risk/risk_manager.py
+touch strategy/risk/allocation.py
+touch strategy/risk/strategy_allocator.py
+
+echo "Creating execution module files..."
+
+# Execution module files
+touch execution/execution_base.py
+touch execution/execution_engine.py
+touch execution/position.py
+touch execution/portfolio.py
+touch execution/backtest/coordinator.py
+touch execution/backtest/simulator.py
+touch execution/backtest/scenario.py
+touch execution/live/exchange_base.py
+touch execution/live/broker_api.py
+touch execution/live/order_management.py
+touch execution/live/websocket_manager.py
+touch execution/live/lifecycle.py
+
+echo "Creating analytics module files..."
+
+# Analytics module files
+touch analytics/metrics.py
+touch analytics/visualize.py
+
+echo "Directory structure and files created successfully!"
