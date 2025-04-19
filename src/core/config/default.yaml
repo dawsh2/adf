@@ -1,0 +1,56 @@
+# config/default.yaml
+indicators:
+  moving_average:
+    simple:
+      window: 20
+      price_key: "close"
+    exponential:
+      window: 20
+      price_key: "close"
+      alpha: null
+  rsi:
+    window: 14
+    overbought: 70
+    oversold: 30
+    price_key: "close"
+  macd:
+    fast_window: 12
+    slow_window: 26
+    signal_window: 9
+    price_key: "close"
+
+rules:
+  ma_crossover:
+    fast_window: 10
+    slow_window: 30
+    price_key: "close"
+  rsi_rule:
+    window: 14
+    overbought: 70
+    oversold: 30
+    price_key: "close"
+
+strategies:
+  ma_crossover:
+    fast_window: 10
+    slow_window: 30
+    ma_type: "simple"
+    price_key: "close"
+    trade_size: 100
+  momentum:
+    rsi_window: 14
+    rsi_overbought: 70
+    rsi_oversold: 30
+    macd_fast: 12
+    macd_slow: 26
+    macd_signal: 9
+    require_confirmation: true
+    trade_size: 100
+  mean_reversion:
+    ma_window: 20
+    std_window: 20
+    entry_std: 2.0
+    exit_std: 0.5
+    stop_loss_pct: 0.05
+    take_profit_pct: 0.10
+    trade_size: 100
