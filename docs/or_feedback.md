@@ -1,0 +1,1 @@
+The only minor suggestion I might make is to standardize your approach to optional dependencies. In some cases you use None defaults with or-expressions (indicators or {}), while in other cases you might want to consider a more consistent approach.
