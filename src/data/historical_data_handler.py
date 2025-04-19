@@ -7,8 +7,8 @@ import logging
 from typing import Dict, List, Optional, Union, Any, Deque
 from collections import deque
 
-from src.core.events.event_utils import create_bar_event
-from src.core.events.event_types import BarEvent
+from core.events.event_types import BarEvent
+from core.events.event_utils import create_bar_event
 from .data_handler_base import DataHandlerBase
 from .data_source_base import DataSourceBase
 
@@ -17,17 +17,16 @@ logger = logging.getLogger(__name__)
 class HistoricalDataHandler(DataHandlerBase):
     """Handler for historical data."""
     
-    def __init__(self, data_source: DataSourceBase, event_bus=None, 
-                max_bars_history: int = 100):
+    def __init__(self, data_source: DataSourceBase, bar_emitter, max_bars_history: int = 100):
         """
         Initialize the historical data handler.
         
         Args:
             data_source: Data source to use
-            event_bus: Event bus for emitting events
+            bar_emitter: Emitter for bar events
             max_bars_history: Maximum number of bars to keep in history
         """
-        super().__init__(event_bus)
+        super().__init__(bar_emitter)
         self.data_source = data_source
         self.data_frames = {}  # symbol -> DataFrame
         self.current_idx = {}  # symbol -> current index
@@ -102,14 +101,22 @@ class HistoricalDataHandler(DataHandlerBase):
         
         # Create bar event
         try:
+            # Extract data from row
+            open_price = float(row['open'])
+            high_price = float(row['high'])
+            low_price = float(row['low'])
+            close_price = float(row['close'])
+            volume = int(row['volume'])
+            
+            # Create bar event
             bar = create_bar_event(
                 symbol=symbol,
                 timestamp=timestamp,
-                open_price=float(row['open']),
-                high_price=float(row['high']),
-                low_price=float(row['low']),
-                close_price=float(row['close']),
-                volume=int(row['volume'])
+                open_price=open_price,
+                high_price=high_price,
+                low_price=low_price,
+                close_price=close_price,
+                volume=volume
             )
             
             # Store in history
@@ -118,9 +125,9 @@ class HistoricalDataHandler(DataHandlerBase):
             # Increment index
             self.current_idx[symbol] = idx + 1
             
-            # Emit event
-            if self.event_bus:
-                self.event_bus.emit(bar)
+            # Emit the bar event
+            if self.bar_emitter:
+                self.bar_emitter.emit(bar)
             
             return bar
         except Exception as e:

@@ -3,31 +3,24 @@ Abstract base class for all data handlers in the trading system.
 """
 from abc import ABC, abstractmethod
 import datetime
+import logging
 from typing import Dict, List, Optional, Union, Any, Tuple
 
-from src.core.events.event_bus import EventBus
-from src.core.events.event_types import BarEvent
+from core.events.event_types import BarEvent
+
+logger = logging.getLogger(__name__)
 
 class DataHandlerBase(ABC):
     """Abstract base class for data handlers."""
     
-    def __init__(self, event_bus=None):
+    def __init__(self, bar_emitter):
         """
         Initialize the data handler.
         
         Args:
-            event_bus: Optional event bus for emitting events
+            bar_emitter: Emitter for bar events
         """
-        self.event_bus = event_bus
-    
-    def set_event_bus(self, event_bus: EventBus) -> None:
-        """
-        Set the event bus.
-        
-        Args:
-            event_bus: Event bus for emitting events
-        """
-        self.event_bus = event_bus
+        self.bar_emitter = bar_emitter
     
     @abstractmethod
     def load_data(self, symbols: Union[str, List[str]], start_date=None, end_date=None, timeframe='1d') -> None:

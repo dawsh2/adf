@@ -84,51 +84,59 @@ class EventEmitter(ABC):
         """Get emitter statistics."""
         return self.stats
 
-
 class BarEmitter(EventEmitter):
-    """Emitter for bar data events."""
+    """Concrete implementation of EventEmitter for bar events."""
     
     def __init__(self, name, event_bus=None):
+        """
+        Initialize the bar emitter.
+        
+        Args:
+            name: Emitter name
+            event_bus: Event bus to emit events to
+        """
         super().__init__(name, event_bus)
         self.running = False
+        self.stats.update({
+            'bars_by_symbol': {}
+        })
     
     def start(self):
-        """Start emitting bar events."""
-        if self.running:
-            logger.warning(f"Bar emitter {self.name} already running")
-            return
-            
+        """Start the bar emitter."""
         self.running = True
         logger.info(f"Bar emitter {self.name} started")
     
     def stop(self):
-        """Stop emitting bar events."""
+        """Stop the bar emitter."""
         self.running = False
         logger.info(f"Bar emitter {self.name} stopped")
     
-    def emit_bar(self, bar_event: BarEvent) -> bool:
+    def emit(self, event):
         """
-        Emit a bar event.
+        Emit a bar event with additional tracking.
         
         Args:
-            bar_event: BarEvent object to emit
+            event: Bar event to emit
             
         Returns:
-            True if bar was emitted, False otherwise
+            True if emitted successfully, False otherwise
         """
+        # Skip if not running
         if not self.running:
-            logger.warning(f"Bar emitter {self.name} not running")
             return False
             
-        # Verify that the object is a BarEvent
-        if not isinstance(bar_event, BarEvent):
-            logger.error(f"Expected BarEvent, got {type(bar_event)}")
-            self.stats['errors'] += 1
-            return False
+        # Track statistics for bar events
+        if isinstance(event, BarEvent):
+            symbol = event.get_symbol()
             
-        # Emit the event
-        return self.emit(bar_event)
-
+            # Update symbol-specific stats
+            if symbol not in self.stats['bars_by_symbol']:
+                self.stats['bars_by_symbol'][symbol] = 0
+            self.stats['bars_by_symbol'][symbol] += 1
+        
+        # Call parent implementation
+        return super().emit(event)
+    
     
 
 class HistoricalDataEmitter(EventEmitter):
