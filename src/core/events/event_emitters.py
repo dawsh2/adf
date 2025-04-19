@@ -85,6 +85,52 @@ class EventEmitter(ABC):
         return self.stats
 
 
+class BarEmitter(EventEmitter):
+    """Emitter for bar data events."""
+    
+    def __init__(self, name, event_bus=None):
+        super().__init__(name, event_bus)
+        self.running = False
+    
+    def start(self):
+        """Start emitting bar events."""
+        if self.running:
+            logger.warning(f"Bar emitter {self.name} already running")
+            return
+            
+        self.running = True
+        logger.info(f"Bar emitter {self.name} started")
+    
+    def stop(self):
+        """Stop emitting bar events."""
+        self.running = False
+        logger.info(f"Bar emitter {self.name} stopped")
+    
+    def emit_bar(self, bar_event: BarEvent) -> bool:
+        """
+        Emit a bar event.
+        
+        Args:
+            bar_event: BarEvent object to emit
+            
+        Returns:
+            True if bar was emitted, False otherwise
+        """
+        if not self.running:
+            logger.warning(f"Bar emitter {self.name} not running")
+            return False
+            
+        # Verify that the object is a BarEvent
+        if not isinstance(bar_event, BarEvent):
+            logger.error(f"Expected BarEvent, got {type(bar_event)}")
+            self.stats['errors'] += 1
+            return False
+            
+        # Emit the event
+        return self.emit(bar_event)
+
+    
+
 class HistoricalDataEmitter(EventEmitter):
     """Emitter for historical market data."""
     
@@ -562,3 +608,41 @@ class WebSocketEmitter(AsyncEventEmitter):
         
         # Stop all tasks
         await super().stop()
+
+
+class SignalEmitter(EventEmitter):
+    """Emitter for trading signal events."""
+    
+    def __init__(self, name, event_bus=None):
+        super().__init__(name, event_bus)
+        self.running = False
+    
+    def start(self):
+        """Start emitting signal events."""
+        if self.running:
+            logger.warning(f"Signal emitter {self.name} already running")
+            return
+            
+        self.running = True
+        logger.info(f"Signal emitter {self.name} started")
+    
+    def stop(self):
+        """Stop emitting signal events."""
+        self.running = False
+        logger.info(f"Signal emitter {self.name} stopped")
+    
+    def emit_signal(self, signal):
+        """
+        Emit a signal to the event bus.
+        
+        Args:
+            signal: Signal to emit
+            
+        Returns:
+            True if signal was emitted, False otherwise
+        """
+        if not self.running:
+            logger.warning(f"Signal emitter {self.name} not running")
+            return False
+            
+        return self.emit(signal)
