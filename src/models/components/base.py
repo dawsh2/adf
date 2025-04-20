@@ -1,23 +1,30 @@
+
+
 # Component base with component_type as class attribute
 class ComponentBase:
-    component_type = "components"  # Base value, overridden in subclasses
+    component_type = "components"
     
     def __init__(self, name, config=None, container=None):
         self.name = name
         self.config = config
         self.container = container
+        self.event_bus = None  # Initialize to None
+        self.emitter = None    # Initialize to None
         
-        # Get configuration section using class attribute
+        # Load parameters
         self.params = self._load_parameters()
         self._validate_params()
     
-    def _load_parameters(self):
-        """Load parameters from configuration."""
-        if not self.config:
-            return self.default_params()
-            
-        # Use class attribute for component type
-        return self.config.get_section(self.component_type).get_dict(self.name, self.default_params())
+    def set_event_bus(self, event_bus):
+        """Set the event bus for this component."""
+        self.event_bus = event_bus
+        return self  # For method chaining
+        
+    def set_emitter(self, emitter):
+        """Set the emitter for this component."""
+        self.emitter = emitter
+        return self  # For method chaining
+
 
 # Indicators with component_type as class attribute
 class IndicatorBase(ComponentBase):
@@ -92,3 +99,33 @@ class RuleBase(ComponentBase):
         """Reset the rule state."""
         self.state = {}    
         
+
+
+class StrategyBase(ComponentBase):
+    component_type = "strategies"
+    
+    def __init__(self, name, config=None, container=None, signal_emitter=None, order_emitter=None):
+        super().__init__(name, config, container)
+        self.signal_emitter = signal_emitter
+        self.order_emitter = order_emitter
+        
+        # Component collections
+        self.indicators = {}
+        self.features = {}
+        self.rules = {}
+        
+        # Track the symbols this strategy is monitoring
+        self.symbols = set()
+        
+        # Strategy state
+        self.state = {}
+        
+        # Create components based on configuration
+        self._setup_components()
+    
+    # Event handlers
+    def on_bar(self, event):
+        pass
+        
+    def on_signal(self, event):
+        pass        
