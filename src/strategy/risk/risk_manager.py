@@ -112,3 +112,147 @@ class RiskManager(RiskManagerBase):
         # Similar to _apply_risk_limits but returns a boolean
         adjusted_quantity = self._apply_risk_limits(symbol, direction, quantity, price)
         return adjusted_quantity >= quantity
+
+
+class SimpleRiskManager(RiskManagerBase):
+    """
+    Simplified risk manager that handles long and short positions.
+    Only allows one position at a time (either long or short).
+    """
+    
+    def __init__(self, portfolio, event_bus=None, fixed_size=100):
+        """Initialize the simplified risk manager."""
+        self.portfolio = portfolio
+        self.event_bus = event_bus
+        self.fixed_size = fixed_size
+        self.orders = []  # For tracking generated orders
+    
+    def set_event_bus(self, event_bus):
+        """Set the event bus."""
+        self.event_bus = event_bus
+        return self
+    
+    def on_signal(self, event):
+        """Process a signal event and produce an order if appropriate."""
+        if not isinstance(event, SignalEvent):
+            return
+        
+        # Extract signal details
+        symbol = event.get_symbol()
+        signal_value = event.get_signal_value()
+        price = event.get_price()
+        
+        # Get current position from the portfolio
+        position = self.portfolio.get_position(symbol)
+        current_quantity = position.quantity if position else 0
+        
+        print(f"Processing signal for {symbol}: {'BUY' if signal_value == SignalEvent.BUY else 'SELL'}, current position: {current_quantity}")
+        
+        # BUY signal processing
+        if signal_value == SignalEvent.BUY:
+            if current_quantity < 0:  # Currently short
+                # Close short position first
+                cover_order = create_order_event(
+                    symbol=symbol,
+                    order_type="MARKET",
+                    direction="BUY",
+                    quantity=abs(current_quantity),  # Cover exact short amount
+                    price=price,
+                    timestamp=event.get_timestamp()
+                )
+                
+                self._emit_order(cover_order)
+                
+                # Then go long
+                buy_order = create_order_event(
+                    symbol=symbol,
+                    order_type="MARKET",
+                    direction="BUY",
+                    quantity=self.fixed_size,
+                    price=price,
+                    timestamp=event.get_timestamp()
+                )
+                
+                self._emit_order(buy_order)
+                
+            elif current_quantity == 0:  # No position
+                # Create BUY order
+                order = create_order_event(
+                    symbol=symbol,
+                    order_type="MARKET",
+                    direction="BUY",
+                    quantity=self.fixed_size,
+                    price=price,
+                    timestamp=event.get_timestamp()
+                )
+                
+                self._emit_order(order)
+                
+            # If already long, we could either do nothing or add to position
+            # For simplicity, we'll do nothing
+        
+        # SELL signal processing
+        elif signal_value == SignalEvent.SELL:
+            if current_quantity > 0:  # Currently long
+                # Close long position first
+                sell_order = create_order_event(
+                    symbol=symbol,
+                    order_type="MARKET",
+                    direction="SELL",
+                    quantity=current_quantity,  # Sell exact long amount
+                    price=price,
+                    timestamp=event.get_timestamp()
+                )
+                
+                self._emit_order(sell_order)
+                
+                # Then go short
+                short_order = create_order_event(
+                    symbol=symbol,
+                    order_type="MARKET",
+                    direction="SELL",
+                    quantity=self.fixed_size,
+                    price=price,
+                    timestamp=event.get_timestamp()
+                )
+                
+                self._emit_order(short_order)
+                
+            elif current_quantity == 0:  # No position
+                # Create SELL order to go short
+                order = create_order_event(
+                    symbol=symbol,
+                    order_type="MARKET",
+                    direction="SELL",
+                    quantity=self.fixed_size,
+                    price=price,
+                    timestamp=event.get_timestamp()
+                )
+                
+                self._emit_order(order)
+                
+            # If already short, we could either do nothing or add to position
+            # For simplicity, we'll do nothing
+    
+    def _emit_order(self, order):
+        """Emit order event and track it."""
+        if not order:
+            return
+            
+        # Add to order list
+        self.orders.append(order)
+        
+        # Emit on event bus
+        if self.event_bus:
+            print(f"Emitting order: {order.get_symbol()} {order.get_direction()} {order.get_quantity()} @ {order.get_price():.2f}")
+            self.event_bus.emit(order)
+    
+    def evaluate_trade(self, symbol, direction, quantity, price):
+        """Evaluate if a trade complies with risk rules."""
+        # Always allow trades in this simplified manager
+        return True
+    
+    def reset(self):
+        """Reset the risk manager state."""
+        self.orders = []
+    

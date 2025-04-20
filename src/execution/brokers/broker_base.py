@@ -3,7 +3,9 @@ from typing import Dict, Any, Optional
 
 from src.core.events.event_types import OrderEvent, FillEvent
 
-class BrokerBase(ABC):
+
+
+class BrokerBase:
     """
     Abstract base class for all broker interfaces.
     Defines common operations for order execution.
@@ -18,12 +20,10 @@ class BrokerBase(ABC):
         self.event_bus = event_bus
         return self
     
-    @abstractmethod
     def place_order(self, order):
         """Place an order with the broker."""
         pass
     
-    @abstractmethod
     def cancel_order(self, order_id):
         """Cancel an existing order."""
         pass
@@ -33,7 +33,11 @@ class BrokerBase(ABC):
         if not isinstance(fill, FillEvent):
             return
             
+        # Try using fill_emitter first, then fall back to event_bus
         if self.fill_emitter:
-            self.fill_emitter.emit(fill)
+            # This could be an event bus or a dedicated emitter
+            if hasattr(self.fill_emitter, 'emit'):
+                self.fill_emitter.emit(fill)
+            # Handle case where fill_emitter might be an event bus directly
         elif self.event_bus:
             self.event_bus.emit(fill)
