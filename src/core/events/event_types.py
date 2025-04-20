@@ -76,6 +76,7 @@ class BarEvent(Event):
         return self.data['volume']
 
 
+
 class SignalEvent(Event):
     """Trading signal event."""
     

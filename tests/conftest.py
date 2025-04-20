@@ -1,11 +1,7 @@
-"""
-Configuration file for pytest and unittest discovery.
-
-This file helps with properly setting up the Python path for tests.
-"""
 import os
 import sys
 import importlib.util
+import importlib.machinery
 
 # Get the project root directory
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -17,22 +13,45 @@ sys.path.insert(0, src_path)
 # Add project root to Python path
 sys.path.insert(0, project_root)
 
-# This is critical: modify sys.modules to make the 'core' module importable directly
-# by creating a module alias from 'src.core' to 'core'
-if importlib.util.find_spec('src.core') and 'core' not in sys.modules:
-    core_spec = importlib.util.find_spec('src.core')
-    core_module = importlib.util.module_from_spec(core_spec)
-    sys.modules['core'] = core_module
-    
-    # Also set up data module alias
-    if importlib.util.find_spec('src.data') and 'data' not in sys.modules:
-        data_spec = importlib.util.find_spec('src.data')
-        data_module = importlib.util.module_from_spec(data_spec)
-        sys.modules['data'] = data_module
+# Create proper module aliases for 'core' and 'data'
+def create_module_alias(source_module, alias_name):
+    """Create a properly initialized module alias in sys.modules."""
+    if source_module in sys.modules:
+        # The source module is already imported, use it
+        sys.modules[alias_name] = sys.modules[source_module]
+    else:
+        # Try to find and load the source module
+        try:
+            # Import the source module
+            imported_module = importlib.import_module(source_module)
+            # Create the alias
+            sys.modules[alias_name] = imported_module
+            
+            # Also create parent modules if needed
+            parts = alias_name.split('.')
+            for i in range(1, len(parts)):
+                parent_name = '.'.join(parts[:i])
+                if parent_name not in sys.modules:
+                    parent_module = type(sys)(parent_name)
+                    setattr(parent_module, parts[i-1], sys.modules['.'.join(parts[:i+1])])
+                    sys.modules[parent_name] = parent_module
+                    
+        except ImportError:
+            # If source module can't be imported yet, create an empty module
+            module = type(sys)(alias_name)
+            sys.modules[alias_name] = module
+
+# Create aliases for main modules and their submodules
+create_module_alias('src.core', 'core')
+create_module_alias('src.core.events', 'core.events') 
+create_module_alias('src.data', 'data')
+create_module_alias('src.models', 'models')
+create_module_alias('src.strategy', 'strategy')
+create_module_alias('src.execution', 'execution')
 
 # Print paths for debugging (only when run directly)
 if __name__ == "__main__":
     print(f"Project root: {project_root}")
     print(f"Source path: {src_path}")
     print(f"Python path: {sys.path}")
-    print(f"Module aliases: {['core' in sys.modules, 'data' in sys.modules]}")
+    print(f"Module aliases: {['core' in sys.modules, 'core.events' in sys.modules, 'data' in sys.modules]}")

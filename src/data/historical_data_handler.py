@@ -7,8 +7,8 @@ import logging
 from typing import Dict, List, Optional, Union, Any, Deque
 from collections import deque
 
-from core.events.event_types import BarEvent
-from core.events.event_utils import create_bar_event
+from src.core.events.event_types import BarEvent
+from src.core.events.event_utils import create_bar_event
 from .data_handler_base import DataHandlerBase
 from .data_source_base import DataSourceBase
 

@@ -137,8 +137,13 @@ class TestCSVDataSource(unittest.TestCase):
         self.assertEqual(df.iloc[0]['volume'], 1000.0)
 
 
+
 if __name__ == '__main__':
-    unittest.main() Create a temporary directory for test files
+    unittest.main()
+
+    def setUp(self):
+        """Set up test environment."""
+        #Create a temporary directory for test files
         self.temp_dir = tempfile.TemporaryDirectory()
         
         # Create a test CSV file

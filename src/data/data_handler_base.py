@@ -6,7 +6,7 @@ import datetime
 import logging
 from typing import Dict, List, Optional, Union, Any, Tuple
 
-from core.events.event_types import BarEvent
+from src.core.events.event_types import BarEvent
 
 logger = logging.getLogger(__name__)
 
