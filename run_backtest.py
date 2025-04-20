@@ -1,20 +1,30 @@
+#!/usr/bin/env python
+"""
+Simple Backtest Script
+
+This script runs a complete backtest of a Moving Average Crossover strategy with
+debug logging to ensure the event and execution system is working correctly.
+"""
 import datetime
+import logging
+import os
 import pandas as pd
 import numpy as np
-import logging
 import matplotlib.pyplot as plt
-import os
+from collections import defaultdict
+import pytz  # Add pytz for timezone handling
 
-# Set up logging - increase to DEBUG level
-logging.basicConfig(level=logging.DEBUG,
-                   format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 # Import core components
 from src.core.events.event_bus import EventBus
 from src.core.events.event_manager import EventManager
 from src.core.events.event_types import EventType, Event, SignalEvent, OrderEvent, FillEvent, BarEvent
-from src.core.events.event_utils import create_bar_event, create_signal_event, create_order_event
 from src.core.events.event_emitters import BarEmitter
 
 # Import data components
@@ -30,67 +40,46 @@ from src.execution.portfolio import PortfolioManager
 from src.strategy.risk.position_sizer import PositionSizer
 from src.strategy.risk.risk_manager import RiskManager
 
-# Import backtest runner
-from backtest_runner import BacktestRunner
+# Import strategy
+from src.models.components.base import StrategyBase
 
-# Simple MA Crossover Strategy with position tracking
-class SimpleMACrossoverStrategy:
-    """Position-aware Moving Average Crossover strategy."""
+class MovingAverageCrossoverStrategy:
+    """Simple moving average crossover strategy."""
     
-    def __init__(self, name, symbols, fast_window=10, slow_window=20):
-        """Initialize the strategy."""
+    def __init__(self, name, symbols, fast_window=5, slow_window=15):
+        """
+        Initialize the strategy.
+        
+        Args:
+            name: Strategy name
+            symbols: List of symbols to trade
+            fast_window: Fast moving average window
+            slow_window: Slow moving average window
+        """
         self.name = name
+        self.event_bus = None
+        
+        # Settings
         self.symbols = symbols if isinstance(symbols, list) else [symbols]
         self.fast_window = fast_window
         self.slow_window = slow_window
-        self.event_bus = None
         
-        # Price history for each symbol
+        # Store price history
         self.price_history = {symbol: [] for symbol in self.symbols}
         
-        # Track MA values
-        self.ma_values = {
-            symbol: {
-                'fast': [],
-                'slow': []
-            } for symbol in self.symbols
-        }
-        
-        # Track positions - we'll update this from fill events
-        self.positions = {symbol: 0 for symbol in self.symbols}
-        
-        # Track generated signals
+        # State
+        self.last_ma_values = {symbol: {'fast': None, 'slow': None} for symbol in self.symbols}
         self.signals = []
         
-        # Track last signal direction to avoid duplicates
-        self.last_signal_type = {symbol: None for symbol in self.symbols}
+        logger.info(f"Initialized MA Crossover strategy: fast={fast_window}, slow={slow_window}")
     
     def set_event_bus(self, event_bus):
         """Set the event bus."""
         self.event_bus = event_bus
-        # Register for FILL events to track positions
-        if event_bus:
-            event_bus.register(EventType.FILL, self.on_fill)
-    
-    def on_fill(self, event):
-        """Track position from fill events."""
-        if not isinstance(event, FillEvent):
-            return
-            
-        symbol = event.get_symbol()
-        if symbol not in self.symbols:
-            return
-            
-        # Update position
-        if event.get_direction() == 'BUY':
-            self.positions[symbol] += event.get_quantity()
-        elif event.get_direction() == 'SELL':
-            self.positions[symbol] -= event.get_quantity()
-            
-        logger.debug(f"Strategy updated position for {symbol}: {self.positions[symbol]}")
+        return self
     
     def on_bar(self, event):
-        """Process a bar event to generate signals."""
+        """Process a bar event."""
         if not isinstance(event, BarEvent):
             return None
             
@@ -99,189 +88,232 @@ class SimpleMACrossoverStrategy:
             return None
             
         # Add price to history
-        price = event.get_close()
-        self.price_history[symbol].append(price)
+        close_price = event.get_close()
+        self.price_history[symbol].append(close_price)
         
-        # Ensure we have enough data
+        logger.debug(f"Adding price {close_price} for {symbol}, history size: {len(self.price_history[symbol])}")
+        
+        # Keep history manageable
+        if len(self.price_history[symbol]) > self.slow_window + 10:
+            self.price_history[symbol] = self.price_history[symbol][-(self.slow_window + 10):]
+        
+        # Check if we have enough data
         if len(self.price_history[symbol]) < self.slow_window:
             return None
             
-        # Keep history size manageable
-        max_history = max(self.fast_window, self.slow_window) * 3
-        if len(self.price_history[symbol]) > max_history:
-            self.price_history[symbol] = self.price_history[symbol][-max_history:]
+        # Calculate MAs
+        fast_ma = sum(self.price_history[symbol][-self.fast_window:]) / self.fast_window
+        slow_ma = sum(self.price_history[symbol][-self.slow_window:]) / self.slow_window
         
-        # Calculate moving averages
-        prices = self.price_history[symbol]
-        fast_ma = sum(prices[-self.fast_window:]) / self.fast_window
-        slow_ma = sum(prices[-self.slow_window:]) / self.slow_window
+        logger.debug(f"MAs for {symbol}: fast={fast_ma:.2f}, slow={slow_ma:.2f}")
         
-        # Store MA values
-        self.ma_values[symbol]['fast'].append(fast_ma)
-        self.ma_values[symbol]['slow'].append(slow_ma)
+        # Get previous MA values
+        prev_fast = self.last_ma_values[symbol]['fast']
+        prev_slow = self.last_ma_values[symbol]['slow']
         
-        # Keep MA history manageable too
-        if len(self.ma_values[symbol]['fast']) > max_history:
-            self.ma_values[symbol]['fast'] = self.ma_values[symbol]['fast'][-max_history:]
-            self.ma_values[symbol]['slow'] = self.ma_values[symbol]['slow'][-max_history:]
+        # Update MA values
+        self.last_ma_values[symbol]['fast'] = fast_ma
+        self.last_ma_values[symbol]['slow'] = slow_ma
         
-        # Need at least two points to detect crossover
-        if len(self.ma_values[symbol]['fast']) < 2:
+        # Skip if no previous values
+        if prev_fast is None or prev_slow is None:
+            logger.debug(f"No previous MA values for {symbol}, skipping signal generation")
             return None
             
-        # Get current and previous values
-        curr_fast = self.ma_values[symbol]['fast'][-1]
-        curr_slow = self.ma_values[symbol]['slow'][-1]
-        prev_fast = self.ma_values[symbol]['fast'][-2]
-        prev_slow = self.ma_values[symbol]['slow'][-2]
-        
-        # Check for crossovers
+        # Check for crossover
         signal = None
-        current_position = self.positions[symbol]
         
-        # Buy signal: Fast MA crosses above Slow MA (only if we don't have a position)
-        if curr_fast > curr_slow and prev_fast <= prev_slow and current_position <= 0:
-            # Generate buy signal
+        # Buy signal: fast MA crosses above slow MA
+        if fast_ma > slow_ma and prev_fast <= prev_slow:
+            logger.info(f"BUY SIGNAL: {symbol} fast MA crossed above slow MA")
             signal = SignalEvent(
                 signal_value=SignalEvent.BUY,
-                price=price,
+                price=close_price,
                 symbol=symbol,
                 rule_id=self.name,
                 confidence=1.0,
                 metadata={
-                    'fast_ma': curr_fast,
-                    'slow_ma': curr_slow
+                    'fast_ma': fast_ma,
+                    'slow_ma': slow_ma
                 },
                 timestamp=event.get_timestamp()
             )
             
-            # Update last signal type
-            self.last_signal_type[symbol] = SignalEvent.BUY
-            
-        # Sell signal: Fast MA crosses below Slow MA (only if we have a position)
-        elif curr_fast < curr_slow and prev_fast >= prev_slow and current_position > 0:
-            # Generate sell signal
+        # Sell signal: fast MA crosses below slow MA
+        elif fast_ma < slow_ma and prev_fast >= prev_slow:
+            logger.info(f"SELL SIGNAL: {symbol} fast MA crossed below slow MA")
             signal = SignalEvent(
                 signal_value=SignalEvent.SELL,
-                price=price,
+                price=close_price,
                 symbol=symbol,
                 rule_id=self.name,
                 confidence=1.0,
                 metadata={
-                    'fast_ma': curr_fast,
-                    'slow_ma': curr_slow
+                    'fast_ma': fast_ma,
+                    'slow_ma': slow_ma
                 },
                 timestamp=event.get_timestamp()
             )
-            
-            # Update last signal type
-            self.last_signal_type[symbol] = SignalEvent.SELL
         
         # Emit signal if generated
         if signal:
             self.signals.append(signal)
             
             if self.event_bus:
-                logger.debug(f"Strategy emitting signal: {symbol} {signal.get_signal_value()} " + 
-                            f"(position: {current_position}) MA:{curr_fast:.2f}/{curr_slow:.2f}")
+                logger.debug(f"Emitting signal: {symbol} {'BUY' if signal.get_signal_value() == SignalEvent.BUY else 'SELL'}")
                 self.event_bus.emit(signal)
-                
+        
         return signal
     
     def reset(self):
-        """Reset strategy state."""
+        """Reset the strategy state."""
         self.price_history = {symbol: [] for symbol in self.symbols}
-        self.ma_values = {symbol: {'fast': [], 'slow': []} for symbol in self.symbols}
-        self.positions = {symbol: 0 for symbol in self.symbols}
+        self.last_ma_values = {symbol: {'fast': None, 'slow': None} for symbol in self.symbols}
         self.signals = []
-        self.last_signal_type = {symbol: None for symbol in self.symbols}
 
-class SimplePositionSizer:
-    """Simplified position sizer with fixed trade size."""
-    
-    def __init__(self, fixed_size=100):
-        """Initialize with fixed position size."""
-        self.fixed_size = fixed_size
-    
-    def calculate_position_size(self, symbol, direction, price, portfolio=None, signal=None):
-        """Calculate position size (fixed amount)."""
-        # Always use the fixed size
-        return self.fixed_size
 
-class SimpleRiskManager:
-    """Simplified risk manager that doesn't complicate position sizing."""
+class EventTracker:
+    """Utility to track events passing through the system."""
     
-    def __init__(self, event_bus=None):
-        """Initialize risk manager."""
-        self.event_bus = event_bus
+    def __init__(self):
+        self.events = defaultdict(list)
+        self.event_counts = defaultdict(int)
     
-    def set_event_bus(self, event_bus):
-        """Set the event bus."""
-        self.event_bus = event_bus
-    
-    def on_signal(self, event):
-        """Process signal events into orders."""
-        if not isinstance(event, SignalEvent):
-            return None
+    def track_event(self, event):
+        """Track an event."""
+        event_type = event.get_type()
+        self.events[event_type].append(event)
+        self.event_counts[event_type] += 1
+        
+        # Log the event
+        if event_type == EventType.SIGNAL:
+            symbol = event.get_symbol()
+            signal_value = event.get_signal_value()
+            direction = "BUY" if signal_value == SignalEvent.BUY else "SELL" if signal_value == SignalEvent.SELL else "NEUTRAL"
+            logger.debug(f"Signal [{len(self.events[event_type])}]: {symbol} {direction}")
             
-        # Extract signal details
-        symbol = event.get_symbol()
-        signal_value = event.get_signal_value()
-        price = event.get_price()
-        
-        # Determine order direction
-        if signal_value == SignalEvent.BUY:
-            direction = "BUY"
-        elif signal_value == SignalEvent.SELL:
-            direction = "SELL"
-        else:
-            return None  # Ignore neutral signals
-        
-        # Use simple fixed size
-        quantity = 100
-        
-        # Create order
-        order = OrderEvent(
-            symbol=symbol,
-            order_type="MARKET",
-            direction=direction,
-            quantity=quantity,
-            price=price,
-            timestamp=event.get_timestamp()
-        )
-        
-        # Emit order
-        if self.event_bus:
-            logger.debug(f"Risk manager creating order: {symbol} {direction} {quantity} @ {price:.2f}")
-            self.event_bus.emit(order)
+        elif event_type == EventType.ORDER:
+            symbol = event.get_symbol()
+            direction = event.get_direction()
+            quantity = event.get_quantity()
+            logger.debug(f"Order [{len(self.events[event_type])}]: {symbol} {direction} {quantity}")
             
-        return order
+        elif event_type == EventType.FILL:
+            symbol = event.get_symbol()
+            direction = event.get_direction()
+            quantity = event.get_quantity()
+            price = event.get_price()
+            logger.debug(f"Fill [{len(self.events[event_type])}]: {symbol} {direction} {quantity} @ {price:.2f}")
+    
+    def get_summary(self):
+        """Get a summary of tracked events."""
+        return {
+            event_type.name: len(events)
+            for event_type, events in self.events.items()
+        }
 
-def run_fixed_backtest(data_dir='./data', symbols=None, start_date='2024-03-25', end_date='2024-04-05',
-                      timeframe='1m', fast_window=5, slow_window=15):
-    """Run a fixed backtest with simplified components."""
+
+def run_backtest(data_dir, symbols=None, start_date=None, end_date=None,
+               timeframe='1m', fast_window=5, slow_window=15):
+    """
+    Run a backtest with the given parameters.
+    
+    Args:
+        data_dir: Directory containing data files
+        symbols: Symbol or list of symbols to trade
+        start_date: Start date for backtest
+        end_date: End date for backtest
+        timeframe: Data timeframe
+        fast_window: Fast moving average window
+        slow_window: Slow moving average window
+        
+    Returns:
+        tuple: (results, event_tracker, portfolio)
+    """
     if symbols is None:
         symbols = ['SPY']
     
-    # Expand user directory
+    if isinstance(symbols, str):
+        symbols = [symbols]
+    
+    # Expand tilde in path if present
     if data_dir.startswith('~'):
         data_dir = os.path.expanduser(data_dir)
     
-    print(f"Starting fixed backtest for {symbols} from {start_date} to {end_date}")
-    print(f"Using MA parameters: fast={fast_window}, slow={slow_window}")
+    logger.info(f"Using data directory: {data_dir}")
+    
+    # Check if data directory exists
+    if not os.path.exists(data_dir):
+        logger.error(f"Data directory '{data_dir}' does not exist!")
+        print(f"\nERROR: Data directory '{data_dir}' does not exist!")
+        print("Please check the path to your data files.")
+        return None, None, None
+    
+    # List available files to help troubleshoot
+    available_files = os.listdir(data_dir)
+    logger.info(f"Files in {data_dir}: {available_files}")
+    print(f"\nAvailable files in {data_dir}:")
+    for file in available_files:
+        print(f"  - {file}")
+        
+    # Check for expected data files
+    for symbol in symbols:
+        expected_file = os.path.join(data_dir, f"{symbol}_{timeframe}.csv")
+        if os.path.exists(expected_file):
+            logger.info(f"Found data file: {expected_file}")
+        else:
+            logger.warning(f"Data file not found: {expected_file}")
+            print(f"\nWARNING: Data file {expected_file} not found!")
+    
+    # Handle timezone-aware date parsing
+    eastern = pytz.timezone('US/Eastern')  # NYSE timezone
+    
+    if start_date:
+        if isinstance(start_date, str):
+            try:
+                start_date = pd.to_datetime(start_date)
+                if start_date.tzinfo is None:
+                    start_date = eastern.localize(start_date)
+            except Exception as e:
+                logger.warning(f"Error parsing start_date: {e}")
+    
+    if end_date:
+        if isinstance(end_date, str):
+            try:
+                end_date = pd.to_datetime(end_date)
+                if end_date.tzinfo is None:
+                    end_date = eastern.localize(end_date)
+            except Exception as e:
+                logger.warning(f"Error parsing end_date: {e}")
+    
+    if start_date and end_date:
+        logger.info(f"Using date range: {start_date} to {end_date}")
+    
+    logger.info(f"Starting backtest for {symbols} from {start_date} to {end_date}")
+    
+    # --- Setup Event System ---
     
     # Create event system
-    event_bus = EventBus()
+    event_bus = EventBus(use_weak_refs=False)  # Use strong refs for testing
     event_manager = EventManager(event_bus)
     
-    # Create data source
+    # Create event tracker
+    tracker = EventTracker()
+    
+    # Register event tracking
+    for event_type in EventType:
+        event_bus.register(event_type, tracker.track_event)
+    
+    # --- Setup Data Components ---
+    
+    # Create data source with correct column mapping and timestamp handling
     data_source = CSVDataSource(
         data_dir=data_dir,
         filename_pattern='{symbol}_{timeframe}.csv',
-        date_column='timestamp',
-        date_format=None,
+        date_column='timestamp',  # Your file has 'timestamp', not 'date'
+        date_format=None,  # Let pandas auto-detect the format
         column_map={
-            'open': ['Open'],
+            'open': ['Open'],  # Match the exact column names in your file
             'high': ['High'],
             'low': ['Low'],
             'close': ['Close'],
@@ -289,45 +321,48 @@ def run_fixed_backtest(data_dir='./data', symbols=None, start_date='2024-03-25',
         }
     )
     
-    # Create emitters
-    bar_emitter = BarEmitter("bar_emitter", event_bus)
+    # Create bar emitter
+    bar_emitter = BarEmitter("backtest_bar_emitter", event_bus)
     bar_emitter.start()
-    
-    fill_emitter = BarEmitter("fill_emitter", event_bus)
-    fill_emitter.start()
     
     # Create data handler
     data_handler = HistoricalDataHandler(data_source, bar_emitter)
     
-    # Fix timezone issues
-    try:
-        start_dt = pd.to_datetime(start_date).tz_localize('UTC')
-        end_dt = pd.to_datetime(end_date).tz_localize('UTC')
-        end_dt = end_dt + pd.Timedelta(days=1)
-    except Exception as e:
-        logger.warning(f"Error processing date strings: {e}")
-        start_dt = start_date
-        end_dt = end_date
+    # --- Setup Portfolio and Risk Components ---
     
-    # Load data
-    for symbol in symbols:
-        data_handler.load_data(symbol, timeframe=timeframe, start_date=start_dt, end_date=end_dt)
-    
-    # Get initial prices
-    initial_prices = {}
-    for symbol in symbols:
-        bars = data_handler.get_latest_bars(symbol, 1)
-        if bars and len(bars) > 0:
-            initial_prices[symbol] = bars[0].get_close()
-        else:
-            initial_prices[symbol] = 100.0
-    
-    # Create portfolio
+    # Create portfolio with initial capital
     initial_capital = 100000.0
     portfolio = PortfolioManager(initial_cash=initial_capital, event_bus=event_bus)
     
-    # Create strategy
-    strategy = SimpleMACrossoverStrategy(
+    # Create position sizer
+    position_sizer = PositionSizer(method='fixed', params={'shares': 100})
+    
+    # Create risk manager
+    risk_manager = RiskManager(
+        portfolio=portfolio,
+        position_sizer=position_sizer,
+        risk_limits={
+            'max_position_size': 1000,
+            'max_exposure': 0.2,
+            'min_trade_size': 10
+        },
+        event_bus=event_bus
+    )
+    
+    # --- Setup Execution Components ---
+    
+    # Create broker and update market data
+    broker = SimulatedBroker()
+    execution_engine = ExecutionEngine(broker_interface=broker, event_bus=event_bus)
+    
+    # Initial market price setup
+    for symbol in symbols:
+        broker.update_market_data(symbol, {"price": 100.0})  # Default price
+    
+    # --- Setup Strategy ---
+    
+    # Create moving average crossover strategy
+    strategy = MovingAverageCrossoverStrategy(
         name="ma_crossover",
         symbols=symbols,
         fast_window=fast_window,
@@ -335,135 +370,137 @@ def run_fixed_backtest(data_dir='./data', symbols=None, start_date='2024-03-25',
     )
     strategy.set_event_bus(event_bus)
     
-    # Create risk manager
-    risk_manager = SimpleRiskManager(event_bus)
+    # --- Register Components with Event Manager ---
     
-    # Create broker
-    broker = SimulatedBroker(fill_emitter=fill_emitter)
-    
-    # Set initial market data
-    for symbol, price in initial_prices.items():
-        logger.debug(f"Setting initial market price for {symbol}: {price}")
-        broker.update_market_data(symbol, {"price": price})
-    
-    # Create execution engine
-    execution_engine = ExecutionEngine(broker_interface=broker)
-    execution_engine.set_event_bus(event_bus)
-    
-    # Register components with event manager
+    # Make explicit event connections
     event_manager.register_component('strategy', strategy, [EventType.BAR])
-    event_manager.register_component('risk_manager', risk_manager, [EventType.SIGNAL])
+    event_manager.register_component('risk', risk_manager, [EventType.SIGNAL])
     event_manager.register_component('execution', execution_engine, [EventType.ORDER])
     event_manager.register_component('portfolio', portfolio, [EventType.FILL])
     
-    # Track events for analysis
-    signal_events = []
-    order_events = []
-    fill_events = []
+    # --- Run Backtest ---
     
-    # Register event trackers
-    def track_signal(event):
-        if event.get_type() == EventType.SIGNAL:
-            signal_events.append(event)
+    # Load data
+    for symbol in symbols:
+        data_handler.load_data(symbol, start_date=start_date, end_date=end_date, timeframe=timeframe)
     
-    def track_order(event):
-        if event.get_type() == EventType.ORDER:
-            order_events.append(event)
+    # Process bars for each symbol
+    equity_curve = []
     
-    def track_fill(event):
-        if event.get_type() == EventType.FILL:
-            fill_events.append(event)
-    
-    event_bus.register(EventType.SIGNAL, track_signal)
-    event_bus.register(EventType.ORDER, track_order)
-    event_bus.register(EventType.FILL, track_fill)
-    
-    # Create backtest runner
-    backtest = BacktestRunner(
-        data_handler=data_handler,
-        strategy=strategy,
-        risk_manager=risk_manager,
-        execution_engine=execution_engine,
-        portfolio=portfolio,
-        event_bus=event_bus,
-        event_manager=event_manager
-    )
-    
-    # Run backtest
-    results = backtest.run(symbols, start_dt, end_dt, timeframe)
-    
-    # Display results
-    print("\n=== Backtest Summary ===")
-    print(f"Signal events: {len(signal_events)}")
-    print(f"Order events: {len(order_events)}")
-    print(f"Fill events: {len(fill_events)}")
-    
-    # Analyze trades
-    if fill_events:
-        fills_by_direction = {
-            'BUY': [f for f in fill_events if f.get_direction() == 'BUY'],
-            'SELL': [f for f in fill_events if f.get_direction() == 'SELL']
-        }
+    for symbol in symbols:
+        bar_count = 0
         
-        print(f"\nTotal buys: {len(fills_by_direction['BUY'])}")
-        print(f"Total sells: {len(fills_by_direction['SELL'])}")
-        
-        # Calculate P&L
-        if fills_by_direction['BUY'] and fills_by_direction['SELL']:
-            total_buy_value = sum(f.get_price() * f.get_quantity() for f in fills_by_direction['BUY'])
-            total_sell_value = sum(f.get_price() * f.get_quantity() for f in fills_by_direction['SELL'])
+        # Process bars
+        while True:
+            bar = data_handler.get_next_bar(symbol)
+            if bar is None:
+                break
             
-            total_buy_qty = sum(f.get_quantity() for f in fills_by_direction['BUY'])
-            total_sell_qty = sum(f.get_quantity() for f in fills_by_direction['SELL'])
+            # Update broker's market data with current price
+            broker.update_market_data(symbol, {"price": bar.get_close()})
             
-            avg_buy_price = total_buy_value / total_buy_qty if total_buy_qty > 0 else 0
-            avg_sell_price = total_sell_value / total_sell_qty if total_sell_qty > 0 else 0
+            # Record equity
+            equity_curve.append({
+                'timestamp': bar.get_timestamp(),
+                'equity': portfolio.get_equity({symbol: bar.get_close()})
+            })
             
-            print(f"Average buy price: ${avg_buy_price:.2f}")
-            print(f"Average sell price: ${avg_sell_price:.2f}")
+            bar_count += 1
             
-            if avg_buy_price > 0 and avg_sell_price > 0:
-                profit_per_share = avg_sell_price - avg_buy_price
-                total_realized_profit = profit_per_share * min(total_buy_qty, total_sell_qty)
-                
-                print(f"Profit per share: ${profit_per_share:.2f}")
-                print(f"Total realized profit: ${total_realized_profit:.2f}")
+            if bar_count % 100 == 0:
+                logger.info(f"Processed {bar_count} bars for {symbol}")
+        
+        logger.info(f"Completed processing {bar_count} bars for {symbol}")
     
-    # Display portfolio results
-    if results:
-        print("\nBacktest Results:")
-        print(f"Initial Capital: ${results['initial_equity']:,.2f}")
-        print(f"Final Equity: ${results['final_equity']:,.2f}")
-        print(f"Return: {results['return_pct']:.2f}%")
-        print(f"Max Drawdown: {results['max_drawdown_pct']:.2f}%")
-        
-        # Check for final positions
-        final_positions = {}
-        for symbol in symbols:
-            position = portfolio.get_position(symbol)
-            qty = position.quantity if position else 0
-            final_positions[symbol] = qty
-        
-        print("\nFinal Positions:")
-        for symbol, qty in final_positions.items():
-            print(f"{symbol}: {qty} shares")
-        
-        print(f"Final Cash: ${portfolio.cash:,.2f}")
+    # --- Calculate Results ---
     
-    return results, backtest, {
-        'signals': signal_events,
-        'orders': order_events,
-        'fills': fill_events,
-        'event_bus': event_bus
+    # Calculate performance metrics
+    equity_df = pd.DataFrame(equity_curve)
+    if not equity_df.empty:
+        equity_df.set_index('timestamp', inplace=True)
+    
+    # Extract key metrics
+    initial_equity = initial_capital
+    final_equity = portfolio.get_equity()
+    returns = (final_equity / initial_equity) - 1
+    
+    # Compile results
+    results = {
+        'initial_equity': initial_equity,
+        'final_equity': final_equity,
+        'return': returns,
+        'return_pct': returns * 100,
+        'trade_count': len(tracker.events[EventType.FILL]),
+        'signal_count': len(tracker.events[EventType.SIGNAL]),
+        'order_count': len(tracker.events[EventType.ORDER]),
     }
+    
+    # --- Print Summary ---
+    
+    print("\n=== Backtest Summary ===")
+    print(f"Initial Equity: ${results['initial_equity']:,.2f}")
+    print(f"Final Equity: ${results['final_equity']:,.2f}")
+    print(f"Return: {results['return_pct']:.2f}%")
+    print(f"Signals Generated: {results['signal_count']}")
+    print(f"Orders Placed: {results['order_count']}")
+    print(f"Trades Executed: {results['trade_count']}")
+    
+    # Print event tracker summary
+    print("\n=== Event Summary ===")
+    for event_type, count in tracker.get_summary().items():
+        print(f"{event_type}: {count}")
+    
+    # Check for issues in event flow
+    if results['signal_count'] > 0 and results['order_count'] == 0:
+        print("\nWARNING: Signals were generated but no orders were created!")
+        print("This suggests an issue with the risk manager or signal-to-order conversion.")
+    
+    if results['order_count'] > 0 and results['trade_count'] == 0:
+        print("\nWARNING: Orders were created but no trades were executed!")
+        print("This suggests an issue with the execution engine or broker.")
+    
+    return results, tracker, portfolio
+
 
 if __name__ == "__main__":
-    results, backtest, debug_data = run_fixed_backtest(
-        data_dir='~/adf/data',
-        symbols=['SPY'],
-        start_date='2024-03-25',
-        end_date='2024-04-05',
-        timeframe='1m',
-        fast_window=5,
-        slow_window=15
+    # Use absolute path with tilde expansion
+    DATA_DIR = "~/adf/data"  # Path to your data directory
+    DATA_DIR = os.path.expanduser(DATA_DIR)  # Expand tilde to full path
+    
+    print(f"Using data directory: {DATA_DIR}")
+    
+    # Use a date range that's within your data
+    # Your data appears to start on 2024-03-26
+    results, tracker, portfolio = run_backtest(
+        data_dir=DATA_DIR,
+        symbols=["SPY"],
+        start_date="2024-03-26",  # Changed to match your data
+        end_date="2024-04-10",    # A reasonable end date within your data range
+        timeframe="1m",
+        fast_window=10,
+        slow_window=30
     )
+    
+    # Plot equity curve if enough data
+    if results and len(tracker.events[EventType.FILL]) > 0:
+        # Create simple equity curve plot
+        equity_history = []
+        for fill in tracker.events[EventType.FILL]:
+            equity_history.append({
+                'timestamp': fill.get_timestamp(),
+                'equity': portfolio.get_equity()
+            })
+        
+        if equity_history:
+            equity_df = pd.DataFrame(equity_history)
+            equity_df.set_index('timestamp', inplace=True)
+            
+            plt.figure(figsize=(12, 6))
+            plt.plot(equity_df.index, equity_df['equity'])
+            plt.title('Portfolio Equity Curve')
+            plt.xlabel('Date')
+            plt.ylabel('Equity ($)')
+            plt.grid(True)
+            plt.tight_layout()
+            plt.savefig('equity_curve.png')
+            plt.close()
