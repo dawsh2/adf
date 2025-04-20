@@ -2,6 +2,8 @@ from typing import Dict, List, Any, Optional
 import datetime
 
 from src.core.events.event_types import FillEvent, EventType
+from src.execution.position import Position
+
 
 class PortfolioManager:
     """

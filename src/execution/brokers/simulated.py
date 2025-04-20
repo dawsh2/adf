@@ -4,6 +4,7 @@ from typing import Dict, Any, Optional
 
 from src.core.events.event_types import OrderEvent, FillEvent
 from src.core.events.event_utils import create_fill_event
+from src.execution.brokers.broker_base import BrokerBase
 
 class SimulatedBroker(BrokerBase):
     """
