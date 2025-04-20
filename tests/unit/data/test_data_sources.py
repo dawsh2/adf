@@ -1,3 +1,6 @@
+"""
+Unit tests for CSV data source.
+"""
 import unittest
 import os
 import tempfile
@@ -14,136 +17,7 @@ class TestCSVDataSource(unittest.TestCase):
     
     def setUp(self):
         """Set up test environment."""
-                # Get data - should skip the invalid date
-        df = self.data_source.get_data('DATES', timeframe='1d')
-        
-        # Check that the invalid date was dropped
-        self.assertEqual(len(df), 4)
-        
-    def test_custom_patterns(self):
-        """Test custom filename patterns."""
-        # Create a data source with custom pattern
-        custom_source = CSVDataSource(
-            self.temp_dir.name, 
-            filename_pattern='{symbol}.csv'
-        )
-        
-        # Create and save test data with custom filename
-        custom_data = self.test_data.copy()
-        custom_data_csv = custom_data.copy()
-        custom_data_csv['date'] = custom_data_csv['date'].dt.strftime('%Y-%m-%d')
-        
-        custom_file = os.path.join(self.temp_dir.name, 'GOOG.csv')
-        custom_data_csv.to_csv(custom_file, index=False)
-        
-        # Get data
-        df = custom_source.get_data('GOOG')
-        
-        # Check data shape
-        self.assertEqual(len(df), 10)
-        self.assertEqual(set(df.columns), {'open', 'high', 'low', 'close', 'volume'})
-        
-        # Check specific values
-        self.assertEqual(df.iloc[0]['close'], 101.0)
-        self.assertEqual(df.iloc[-1]['close'], 110.0)
-        
-        # Check standard pattern no longer works
-        df = custom_source.get_data('AAPL', timeframe='1d')
-        self.assertTrue(df.empty)
-    
-    def test_custom_column_mapping(self):
-        """Test custom column mapping."""
-        # Create data with completely different column names
-        different_cols = pd.DataFrame({
-            'timestamp': pd.date_range(start='2023-01-01', periods=5, freq='D'),
-            'price_open': [100.0, 101.0, 102.0, 103.0, 104.0],
-            'price_max': [102.0, 103.0, 104.0, 105.0, 106.0],
-            'price_min': [99.0, 100.0, 101.0, 102.0, 103.0],
-            'price_last': [101.0, 102.0, 103.0, 104.0, 105.0],
-            'quantity': [1000, 1100, 1200, 1300, 1400]
-        })
-        
-        # Save as string dates for CSV
-        different_cols_csv = different_cols.copy()
-        different_cols_csv['timestamp'] = different_cols_csv['timestamp'].dt.strftime('%Y-%m-%d')
-        
-        # Save the test data
-        custom_file = os.path.join(self.temp_dir.name, 'CUSTOM_1d.csv')
-        different_cols_csv.to_csv(custom_file, index=False)
-        
-        # Create a data source with custom column mapping
-        custom_source = CSVDataSource(
-            self.temp_dir.name,
-            date_column='timestamp',
-            column_map={
-                'open': ['price_open'],
-                'high': ['price_max'],
-                'low': ['price_min'],
-                'close': ['price_last'],
-                'volume': ['quantity']
-            }
-        )
-        
-        # Get data
-        df = custom_source.get_data('CUSTOM', timeframe='1d')
-        
-        # Check data was loaded correctly
-        self.assertEqual(len(df), 5)
-        self.assertEqual(set(df.columns), {'open', 'high', 'low', 'close', 'volume'})
-        
-        # Check specific values (now mapped to standard column names)
-        self.assertEqual(df.iloc[0]['open'], 100.0)
-        self.assertEqual(df.iloc[0]['high'], 102.0)
-        self.assertEqual(df.iloc[0]['low'], 99.0)
-        self.assertEqual(df.iloc[0]['close'], 101.0)
-        self.assertEqual(df.iloc[0]['volume'], 1000.0)
-    
-    def test_file_not_found(self):
-        """Test handling of file not found."""
-        # Get data for non-existent file
-        df = self.data_source.get_data('NONEXISTENT', timeframe='1d')
-        
-        # Check that we got an empty DataFrame
-        self.assertTrue(df.empty)
-    
-    def test_numeric_conversion(self):
-        """Test numeric conversion of data."""
-        # Create a test CSV file with string numeric values
-        string_nums = pd.DataFrame({
-            'date': pd.date_range(start='2023-01-01', periods=5, freq='D'),
-            'open': ['100.0', '101.0', '102.0', '103.0', '104.0'],
-            'high': ['102.0', '103.0', '104.0', '105.0', '106.0'],
-            'low': ['99.0', '100.0', '101.0', '102.0', '103.0'],
-            'close': ['101.0', '102.0', '103.0', '104.0', '105.0'],
-            'volume': ['1000', '1100', '1200', '1300', '1400']
-        })
-        
-        # Save the test data
-        string_file = os.path.join(self.temp_dir.name, 'STRING_1d.csv')
-        string_nums.to_csv(string_file, index=False)
-        
-        # Get data
-        df = self.data_source.get_data('STRING', timeframe='1d')
-        
-        # Check data types
-        self.assertTrue(pd.api.types.is_numeric_dtype(df['open']))
-        self.assertTrue(pd.api.types.is_numeric_dtype(df['high']))
-        self.assertTrue(pd.api.types.is_numeric_dtype(df['low']))
-        self.assertTrue(pd.api.types.is_numeric_dtype(df['close']))
-        self.assertTrue(pd.api.types.is_numeric_dtype(df['volume']))
-        
-        # Check specific values
-        self.assertEqual(df.iloc[0]['open'], 100.0)
-        self.assertEqual(df.iloc[0]['volume'], 1000.0)
-
-
-
-if __name__ == '__main__':
-    unittest.main()
-
-    def setUp(self):
-        """Set up test environment."""
-        #Create a temporary directory for test files
+        # Create a temporary directory for test files
         self.temp_dir = tempfile.TemporaryDirectory()
         
         # Create a test CSV file
@@ -318,4 +192,128 @@ if __name__ == '__main__':
         bad_file = os.path.join(self.temp_dir.name, 'DATES_1d.csv')
         bad_dates.to_csv(bad_file, index=False)
         
-        #
+        # Get data - should skip the invalid date
+        df = self.data_source.get_data('DATES', timeframe='1d')
+        
+        # Check that the invalid date was dropped
+        self.assertEqual(len(df), 4)
+    
+    def test_custom_patterns(self):
+        """Test custom filename patterns."""
+        # Create a data source with custom pattern
+        custom_source = CSVDataSource(
+            self.temp_dir.name, 
+            filename_pattern='{symbol}.csv'
+        )
+        
+        # Create and save test data with custom filename
+        custom_data = self.test_data.copy()
+        custom_data_csv = custom_data.copy()
+        custom_data_csv['date'] = custom_data_csv['date'].dt.strftime('%Y-%m-%d')
+        
+        custom_file = os.path.join(self.temp_dir.name, 'GOOG.csv')
+        custom_data_csv.to_csv(custom_file, index=False)
+        
+        # Get data
+        df = custom_source.get_data('GOOG')
+        
+        # Check data shape
+        self.assertEqual(len(df), 10)
+        self.assertEqual(set(df.columns), {'open', 'high', 'low', 'close', 'volume'})
+        
+        # Check specific values
+        self.assertEqual(df.iloc[0]['close'], 101.0)
+        self.assertEqual(df.iloc[-1]['close'], 110.0)
+        
+        # Check standard pattern no longer works
+        df = custom_source.get_data('AAPL', timeframe='1d')
+        self.assertTrue(df.empty)
+    
+    def test_custom_column_mapping(self):
+        """Test custom column mapping."""
+        # Create data with completely different column names
+        different_cols = pd.DataFrame({
+            'timestamp': pd.date_range(start='2023-01-01', periods=5, freq='D'),
+            'price_open': [100.0, 101.0, 102.0, 103.0, 104.0],
+            'price_max': [102.0, 103.0, 104.0, 105.0, 106.0],
+            'price_min': [99.0, 100.0, 101.0, 102.0, 103.0],
+            'price_last': [101.0, 102.0, 103.0, 104.0, 105.0],
+            'quantity': [1000, 1100, 1200, 1300, 1400]
+        })
+        
+        # Save as string dates for CSV
+        different_cols_csv = different_cols.copy()
+        different_cols_csv['timestamp'] = different_cols_csv['timestamp'].dt.strftime('%Y-%m-%d')
+        
+        # Save the test data
+        custom_file = os.path.join(self.temp_dir.name, 'CUSTOM_1d.csv')
+        different_cols_csv.to_csv(custom_file, index=False)
+        
+        # Create a data source with custom column mapping
+        custom_source = CSVDataSource(
+            self.temp_dir.name,
+            date_column='timestamp',
+            column_map={
+                'open': ['price_open'],
+                'high': ['price_max'],
+                'low': ['price_min'],
+                'close': ['price_last'],
+                'volume': ['quantity']
+            }
+        )
+        
+        # Get data
+        df = custom_source.get_data('CUSTOM', timeframe='1d')
+        
+        # Check data was loaded correctly
+        self.assertEqual(len(df), 5)
+        self.assertEqual(set(df.columns), {'open', 'high', 'low', 'close', 'volume'})
+        
+        # Check specific values (now mapped to standard column names)
+        self.assertEqual(df.iloc[0]['open'], 100.0)
+        self.assertEqual(df.iloc[0]['high'], 102.0)
+        self.assertEqual(df.iloc[0]['low'], 99.0)
+        self.assertEqual(df.iloc[0]['close'], 101.0)
+        self.assertEqual(df.iloc[0]['volume'], 1000.0)
+    
+    def test_file_not_found(self):
+        """Test handling of file not found."""
+        # Get data for non-existent file
+        df = self.data_source.get_data('NONEXISTENT', timeframe='1d')
+        
+        # Check that we got an empty DataFrame
+        self.assertTrue(df.empty)
+    
+    def test_numeric_conversion(self):
+        """Test numeric conversion of data."""
+        # Create a test CSV file with string numeric values
+        string_nums = pd.DataFrame({
+            'date': pd.date_range(start='2023-01-01', periods=5, freq='D'),
+            'open': ['100.0', '101.0', '102.0', '103.0', '104.0'],
+            'high': ['102.0', '103.0', '104.0', '105.0', '106.0'],
+            'low': ['99.0', '100.0', '101.0', '102.0', '103.0'],
+            'close': ['101.0', '102.0', '103.0', '104.0', '105.0'],
+            'volume': ['1000', '1100', '1200', '1300', '1400']
+        })
+        
+        # Save the test data
+        string_file = os.path.join(self.temp_dir.name, 'STRING_1d.csv')
+        string_nums.to_csv(string_file, index=False)
+        
+        # Get data
+        df = self.data_source.get_data('STRING', timeframe='1d')
+        
+        # Check data types
+        self.assertTrue(pd.api.types.is_numeric_dtype(df['open']))
+        self.assertTrue(pd.api.types.is_numeric_dtype(df['high']))
+        self.assertTrue(pd.api.types.is_numeric_dtype(df['low']))
+        self.assertTrue(pd.api.types.is_numeric_dtype(df['close']))
+        self.assertTrue(pd.api.types.is_numeric_dtype(df['volume']))
+        
+        # Check specific values
+        self.assertEqual(df.iloc[0]['open'], 100.0)
+        self.assertEqual(df.iloc[0]['volume'], 1000.0)
+
+
+if __name__ == '__main__':
+    unittest.main()
