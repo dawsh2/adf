@@ -133,16 +133,15 @@ class BarEmitter(EventEmitter):
             if symbol not in self.stats['bars_by_symbol']:
                 self.stats['bars_by_symbol'][symbol] = 0
             self.stats['bars_by_symbol'][symbol] += 1
-            return True 
 
-# In src/core/events/event_emitters.py, in the BarEmitter class
+        return super().emit(event)
+
     def reset_stats(self):
         """Reset emitter statistics."""
         super().reset_stats()  # Call parent class reset_stats
         self.stats['bars_by_symbol'] = {}  # Restore the bars_by_symbol key            
         
-        # Call parent implementation
-        return super().emit(event)
+
     
 
 

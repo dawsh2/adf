@@ -2,6 +2,7 @@ import os
 import sys
 import importlib.util
 import importlib.machinery
+import types
 
 # Get the project root directory
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -12,6 +13,9 @@ sys.path.insert(0, src_path)
 
 # Add project root to Python path
 sys.path.insert(0, project_root)
+
+# Add integration dir
+sys.path.insert(0, os.path.join(project_root, 'tests/integration'))
 
 # Create proper module aliases for 'core' and 'data'
 def create_module_alias(source_module, alias_name):
@@ -49,9 +53,48 @@ create_module_alias('src.models', 'models')
 create_module_alias('src.strategy', 'strategy')
 create_module_alias('src.execution', 'execution')
 
+# Create data namespace if it doesn't exist
+if 'data' not in sys.modules:
+    data_module = types.ModuleType('data')
+    sys.modules['data'] = data_module
+
+# Directly import and alias the problematic test modules
+try:
+    # First try to use a direct module import
+    test_data_event_integration = importlib.import_module('tests.integration.data.test_data_event_integration')
+    sys.modules['data.test_data_event_integration'] = test_data_event_integration
+except ImportError:
+    # If that fails, try to load from the file path
+    test_path = os.path.join(project_root, 'tests/integration/data/test_data_event_integration.py')
+    if os.path.exists(test_path):
+        spec = importlib.util.spec_from_file_location('data.test_data_event_integration', test_path)
+        test_data_event_integration = importlib.util.module_from_spec(spec)
+        sys.modules['data.test_data_event_integration'] = test_data_event_integration
+        spec.loader.exec_module(test_data_event_integration)
+    else:
+        # If all else fails, create an empty module
+        sys.modules['data.test_data_event_integration'] = types.ModuleType('data.test_data_event_integration')
+
+try:
+    # First try to use a direct module import
+    test_transformers = importlib.import_module('tests.integration.data.test_transformers')
+    sys.modules['data.test_transformers'] = test_transformers
+except ImportError:
+    # If that fails, try to load from the file path
+    test_path = os.path.join(project_root, 'tests/integration/data/test_transformers.py')
+    if os.path.exists(test_path):
+        spec = importlib.util.spec_from_file_location('data.test_transformers', test_path)
+        test_transformers = importlib.util.module_from_spec(spec)
+        sys.modules['data.test_transformers'] = test_transformers
+        spec.loader.exec_module(test_transformers)
+    else:
+        # If all else fails, create an empty module
+        sys.modules['data.test_transformers'] = types.ModuleType('data.test_transformers')
+
 # Print paths for debugging (only when run directly)
 if __name__ == "__main__":
     print(f"Project root: {project_root}")
     print(f"Source path: {src_path}")
     print(f"Python path: {sys.path}")
     print(f"Module aliases: {['core' in sys.modules, 'core.events' in sys.modules, 'data' in sys.modules]}")
+    print(f"Test modules: {['data.test_data_event_integration' in sys.modules, 'data.test_transformers' in sys.modules]}")
