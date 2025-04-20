@@ -245,20 +245,28 @@ class TestMockRule(unittest.TestCase):
 
 
 # Mock rule implementation for testing
-class MockRule(RuleBase):
+# Mock rule implementation for testing
+
+class MockRule:
     """Mock rule implementation for testing."""
+
+    component_type = "rules"
+
     
     def __init__(self, name, config=None, container=None, signal_emitter=None, params=None):
         """Initialize the mock rule."""
         # Set default params if not provided
-        params = params or {"threshold": 100.0}
+        self.name = name
+        self.config = config
+        self.container = container
+        self.signal_emitter = signal_emitter
+        self.event_bus = None
         
-        # Call parent constructor
-        super().__init__(name, config, container, signal_emitter)
+        # Set params directly 
+        self.params = params or {"threshold": 100.0}
         
-        # Override params if provided
-        if params:
-            self.params = params
+        # Initialize state
+        self.state = {}
     
     def on_bar(self, event):
         """
@@ -335,6 +343,15 @@ class MockRule(RuleBase):
             self.signal_emitter.emit(signal)
             
         return signal
+
+    def set_event_bus(self, event_bus):
+        """Set the event bus."""
+        self.event_bus = event_bus
+        return self
+    
+    def reset(self):
+        """Reset the rule state."""
+        self.state = {}
 
 
 if __name__ == '__main__':

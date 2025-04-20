@@ -32,6 +32,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Add the project root to the path so importing works correctly
+project_root = os.path.abspath(os.path.dirname(__file__))
+sys.path.insert(0, project_root)
+
 # Define test directories
 UNIT_TEST_DIR = 'tests/unit'
 INTEGRATION_TEST_DIR = 'tests/integration'
@@ -59,8 +63,17 @@ def discover_tests(start_dirs: List[str]) -> unittest.TestSuite:
     for start_dir in start_dirs:
         if os.path.exists(start_dir):
             logger.info(f"Discovering tests in {start_dir}")
-            tests = unittest.defaultTestLoader.discover(start_dir)
-            suite.addTest(tests)
+            pattern = 'test_*.py'  # Standard test file pattern
+            
+            # Create loader and discover tests
+            loader = unittest.defaultTestLoader
+            discovered_tests = loader.discover(start_dir, pattern=pattern)
+            
+            # Debug output
+            logger.debug(f"Found {discovered_tests.countTestCases()} test cases in {start_dir}")
+            
+            # Add them to the suite
+            suite.addTest(discovered_tests)
         else:
             logger.warning(f"Test directory not found: {start_dir}")
     
@@ -82,12 +95,13 @@ def run_tests(suite: unittest.TestSuite, verbosity: int = 1) -> unittest.TestRes
     return runner.run(suite)
 
 
-def generate_html_report(result: unittest.TestResult, output_file: str = 'test_report.html'):
+def generate_html_report(result: unittest.TestResult, suite: unittest.TestSuite, output_file: str = 'test_report.html'):
     """
     Generate an HTML report of test results.
     
     Args:
         result: TestResult to generate report from
+        suite: TestSuite with all tests
         output_file: File to write report to
     """
     try:
@@ -206,10 +220,18 @@ def generate_html_report(result: unittest.TestResult, output_file: str = 'test_r
     for test, _ in result.failures + result.errors:
         failed_tests.append(str(test))
     
-    # Get all tests (approximately)
-    for test in suite:
-        for t in test:
-            all_tests.append(str(t))
+    # Get all tests by iterating the suite
+    def get_test_names(test_suite):
+        test_names = []
+        for test in test_suite:
+            if isinstance(test, unittest.TestCase):
+                test_names.append(str(test))
+            else:
+                # This is a test suite, recurse
+                test_names.extend(get_test_names(test))
+        return test_names
+    
+    all_tests = get_test_names(suite)
     
     # Render template
     template = jinja2.Template(template_str)
@@ -234,6 +256,7 @@ def parse_args():
     parser.add_argument('--component', help='Run tests for a specific component')
     parser.add_argument('--verbose', action='store_true', help='Show more detailed output')
     parser.add_argument('--html-report', action='store_true', help='Generate HTML report of test results')
+    parser.add_argument('--debug', action='store_true', help='Show debug information')
     
     return parser.parse_args()
 
@@ -267,8 +290,19 @@ def main():
     """Main function."""
     args = parse_args()
     
+    # Set logging level
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
+    
     # Get test directories
     test_dirs = get_test_dirs(args)
+    
+    # Show debugging info
+    if args.debug:
+        logger.debug(f"Project root: {project_root}")
+        logger.debug(f"Python path: {sys.path}")
+        for test_dir in test_dirs:
+            logger.debug(f"Looking for tests in: {os.path.abspath(test_dir)}")
     
     # Discover tests
     start_time = time.time()
@@ -300,7 +334,7 @@ def main():
     
     # Generate HTML report if requested
     if args.html_report:
-        generate_html_report(result)
+        generate_html_report(result, suite)
     
     # Return with appropriate exit code
     sys.exit(not result.wasSuccessful())
