@@ -78,22 +78,33 @@ class CSVDataSource(DataSourceBase):
 
             # Convert date column to datetime
             if date_col in df.columns:
+                # MODIFICATION: Convert to datetime without timezone information
                 df[date_col] = pd.to_datetime(df[date_col], 
                                             format=self.date_format,
-                                            errors='coerce')
+                                            errors='coerce',
+                                            utc=False)  # Don't force timezone
 
                 # Drop rows with invalid dates
                 df = df.dropna(subset=[date_col])
 
+                # MODIFICATION: Make start_date and end_date timezone-naive if they have timezone
+                if start_date is not None:
+                    if hasattr(start_date, 'tzinfo') and start_date.tzinfo is not None:
+                        start_date = start_date.replace(tzinfo=None)
+
+                if end_date is not None:
+                    if hasattr(end_date, 'tzinfo') and end_date.tzinfo is not None:
+                        end_date = end_date.replace(tzinfo=None)
+
                 # Filter by date range
                 if start_date:
                     if isinstance(start_date, str):
-                        start_date = pd.to_datetime(start_date)
+                        start_date = pd.to_datetime(start_date, utc=False)
                     df = df[df[date_col] >= start_date]
 
                 if end_date:
                     if isinstance(end_date, str):
-                        end_date = pd.to_datetime(end_date)
+                        end_date = pd.to_datetime(end_date, utc=False)
                     df = df[df[date_col] <= end_date]
 
                 # Set date as index
@@ -104,7 +115,6 @@ class CSVDataSource(DataSourceBase):
         except Exception as e:
             logger.error(f"Error reading CSV file {filename}: {e}")
             return pd.DataFrame()
-        
 
     
     def is_available(self, symbol: str, start_date=None, end_date=None, 

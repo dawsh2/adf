@@ -1,4 +1,4 @@
-from .mixins import OptimizableMixin
+from .mixins import OptimizableMixin, FilterableMixin
 
 
 

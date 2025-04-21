@@ -60,8 +60,8 @@ def sequential_optimization(manager, optimizer, targets, evaluator, **kwargs):
             original = target.get_parameters()
             # Apply new parameters
             target.set_parameters(params)
-            # Evaluate
-            score = evaluator()
+            # Evaluate - pass the params to the evaluator
+            score = evaluator(params)  # Fixed - passing params
             # Restore original parameters
             target.set_parameters(original)
             return score

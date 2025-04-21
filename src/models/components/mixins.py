@@ -32,7 +32,6 @@ class OptimizableMixin(OptimizationTarget):
 
 
 
-# src/models/components/mixins.py (continued)
 
 class FilterableMixin(FilterTarget):
     """

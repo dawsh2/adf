@@ -1,7 +1,6 @@
 # src/models/filters/filter_base.py
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List
-from .result import FilterResult
 
 
 class FilterResult:
