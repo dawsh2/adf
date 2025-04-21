@@ -41,8 +41,7 @@ class CSVDataSource(DataSourceBase):
 
 
 
-    def get_data(self, symbol: str, start_date=None, end_date=None, 
-               timeframe='1d') -> pd.DataFrame:
+    def get_data(self, symbol: str, start_date=None, end_date=None, timeframe='1d') -> pd.DataFrame:
         """Get data for a symbol within a date range."""
         filename = self._get_filename(symbol, timeframe)
         if not os.path.exists(filename):
@@ -53,68 +52,42 @@ class CSVDataSource(DataSourceBase):
             # Read CSV
             df = pd.read_csv(filename)
 
-            # Find date column (case-insensitive)
-            date_col = None
-            for col in df.columns:
-                if col.lower() == self.date_column.lower():
-                    date_col = col
-                    break
-
-            if date_col is None:
-                logger.warning(f"Date column '{self.date_column}' not found in {df.columns}")
-                return pd.DataFrame()
-
-            # Check if required columns exist
-            required_cols = ['open', 'high', 'low', 'close', 'volume']
-            actual_cols = self._map_columns(df.columns)
-
-            if not all(col in actual_cols.values() for col in required_cols):
-                missing = [col for col in required_cols if col not in actual_cols.values()]
-                logger.warning(f"Missing required columns: {missing}")
-                return pd.DataFrame()
-
-            # Rename columns to standard names
-            df = df.rename(columns=actual_cols)
-
             # Convert date column to datetime
-            if date_col in df.columns:
-                # MODIFICATION: Convert to datetime without timezone information
-                df[date_col] = pd.to_datetime(df[date_col], 
-                                            format=self.date_format,
-                                            errors='coerce',
-                                            utc=False)  # Don't force timezone
+            if self.date_column in df.columns:
+                # Use utc=True to avoid timezone warnings
+                df[self.date_column] = pd.to_datetime(df[self.date_column], format=self.date_format, errors='coerce', utc=True)
 
-                # Drop rows with invalid dates
-                df = df.dropna(subset=[date_col])
+                # Make start_date and end_date timezone-aware if they aren't already
+                if start_date is not None and not hasattr(start_date, 'tzinfo'):
+                    start_date = pd.Timestamp(start_date, tz='UTC')
+                elif start_date is not None and start_date.tzinfo is None:
+                    start_date = start_date.replace(tzinfo=pytz.UTC)
 
-                # MODIFICATION: Make start_date and end_date timezone-naive if they have timezone
-                if start_date is not None:
-                    if hasattr(start_date, 'tzinfo') and start_date.tzinfo is not None:
-                        start_date = start_date.replace(tzinfo=None)
-
-                if end_date is not None:
-                    if hasattr(end_date, 'tzinfo') and end_date.tzinfo is not None:
-                        end_date = end_date.replace(tzinfo=None)
+                if end_date is not None and not hasattr(end_date, 'tzinfo'):
+                    end_date = pd.Timestamp(end_date, tz='UTC')
+                elif end_date is not None and end_date.tzinfo is None:
+                    end_date = end_date.replace(tzinfo=pytz.UTC)
 
                 # Filter by date range
                 if start_date:
-                    if isinstance(start_date, str):
-                        start_date = pd.to_datetime(start_date, utc=False)
-                    df = df[df[date_col] >= start_date]
-
+                    df = df[df[self.date_column] >= start_date]
                 if end_date:
-                    if isinstance(end_date, str):
-                        end_date = pd.to_datetime(end_date, utc=False)
-                    df = df[df[date_col] <= end_date]
+                    df = df[df[self.date_column] <= end_date]
 
                 # Set date as index
-                df.set_index(date_col, inplace=True)
+                df.set_index(self.date_column, inplace=True)
+
+            # Map columns
+            column_mapping = self._map_columns(df.columns)
+            df = df.rename(columns=column_mapping)
 
             return df
 
         except Exception as e:
             logger.error(f"Error reading CSV file {filename}: {e}")
-            return pd.DataFrame()
+            return pd.DataFrame()        
+
+
 
     
     def is_available(self, symbol: str, start_date=None, end_date=None, 

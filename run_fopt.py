@@ -10,11 +10,11 @@ import numpy as np
 import pandas as pd
 import datetime
 import logging
+import itertools
+import pytz  # Added pytz for timezone handling
 from enum import Enum
 from typing import Dict, Any, List, Optional, Tuple
 from collections import defaultdict
-
-
 
 # Data components
 from src.data.sources.csv_handler import CSVDataSource
@@ -33,11 +33,8 @@ from src.execution.execution_base import ExecutionEngine
 from src.execution.portfolio import PortfolioManager
 from src.strategy.risk.risk_manager import SimpleRiskManager
 
-
 # For grid search
 from src.models.optimization.grid_search import GridSearchOptimizer
-
-
 
 # Configure logging
 logging.basicConfig(
@@ -46,10 +43,243 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Adding a function to calculate portfolio stats since it's referenced 
+# but not defined in the original code
+def calculate_portfolio_stats(portfolio, equity_curve):
+    """
+    Calculate portfolio performance statistics.
+    
+    Args:
+        portfolio: Portfolio manager instance
+        equity_curve: List of equity values by timestamp
+        
+    Returns:
+        dict: Performance statistics
+    """
+    if not equity_curve:
+        return {
+            'initial_equity': portfolio.initial_cash,
+            'final_equity': portfolio.get_equity(),
+            'total_return': 0,
+            'annual_return': 0,
+            'max_drawdown': 0,
+            'sharpe_ratio': 0,
+            'trades': len(portfolio.fill_history)
+        }
+        
+    # Create DataFrame from equity curve
+    df = pd.DataFrame(equity_curve)
+    df.set_index('timestamp', inplace=True)
+    
+    # Calculate returns
+    df['returns'] = df['equity'].pct_change()
+    
+    # Initial and final values
+    initial_equity = df['equity'].iloc[0]
+    final_equity = df['equity'].iloc[-1]
+    
+    # Total return
+    total_return = (final_equity / initial_equity) - 1
+    
+    # Trading days passed
+    days = (df.index[-1] - df.index[0]).days
+    years = max(days / 365, 0.01)  # Avoid division by zero
+    
+    # Annualized return
+    annual_return = (1 + total_return) ** (1 / years) - 1
+    
+    # Maximum drawdown
+    df['cummax'] = df['equity'].cummax()
+    df['drawdown'] = (df['equity'] / df['cummax']) - 1
+    max_drawdown = df['drawdown'].min()
+    
+    # Sharpe ratio
+    risk_free_rate = 0.01 / 252  # Daily risk-free rate
+    excess_returns = df['returns'] - risk_free_rate
+    sharpe_ratio = excess_returns.mean() / df['returns'].std() * np.sqrt(252) if df['returns'].std() > 0 else 0
+    
+    return {
+        'initial_equity': initial_equity,
+        'final_equity': final_equity,
+        'total_return': total_return,
+        'annual_return': annual_return,
+        'max_drawdown': abs(max_drawdown),
+        'sharpe_ratio': sharpe_ratio,
+        'trades': len(portfolio.fill_history)
+    }
 
+# Adding EventTracker class since it's referenced but not defined
+class EventTracker:
+    """Utility to track events passing through the system."""
+    
+    def __init__(self):
+        self.events = defaultdict(list)
+        self.event_counts = defaultdict(int)
+    
+    def track_event(self, event):
+        """Track an event."""
+        event_type = event.get_type()
+        self.events[event_type].append(event)
+        self.event_counts[event_type] += 1
+        
+        # Log the event
+        if event_type == EventType.SIGNAL:
+            symbol = event.get_symbol()
+            signal_value = event.get_signal_value()
+            direction = "BUY" if signal_value == SignalEvent.BUY else "SELL" if signal_value == SignalEvent.SELL else "NEUTRAL"
+            logger.debug(f"Signal [{len(self.events[event_type])}]: {symbol} {direction}")
+            
+        elif event_type == EventType.ORDER:
+            symbol = event.get_symbol()
+            direction = event.get_direction()
+            quantity = event.get_quantity()
+            logger.debug(f"Order [{len(self.events[event_type])}]: {symbol} {direction} {quantity}")
+            
+        elif event_type == EventType.FILL:
+            symbol = event.get_symbol()
+            direction = event.get_direction()
+            quantity = event.get_quantity()
+            price = event.get_price()
+            logger.debug(f"Fill [{len(self.events[event_type])}]: {symbol} {direction} {quantity} @ {price:.2f}")
+    
+    def get_summary(self):
+        """Get a summary of tracked events."""
+        return {
+            event_type.name: len(events)
+            for event_type, events in self.events.items()
+        }
 
-
-
+# Adding a placeholder for run_backtest as it's referenced but not defined
+def run_backtest(data_dir, symbols, start_date=None, end_date=None, 
+               timeframe='1m', fast_window=5, slow_window=15, fixed_position_size=100):
+    """
+    Run a backtest with the given parameters.
+    
+    Args:
+        data_dir: Directory containing data files
+        symbols: Symbol or list of symbols to trade
+        start_date: Start date for backtest
+        end_date: End date for backtest
+        timeframe: Data timeframe
+        fast_window: Fast moving average window
+        slow_window: Slow moving average window
+        fixed_position_size: Fixed position size for each trade
+        
+    Returns:
+        tuple: (results, tracker, portfolio, equity_curve)
+    """
+    # Create event system
+    event_bus = EventBus(use_weak_refs=False)
+    event_manager = EventManager(event_bus)
+    
+    # Create tracker
+    tracker = EventTracker()
+    
+    # Register tracker
+    for event_type in EventType:
+        event_bus.register(event_type, tracker.track_event)
+    
+    # Create data source
+    data_source = CSVDataSource(
+        data_dir=data_dir,
+        filename_pattern='{symbol}_{timeframe}.csv',
+        date_column='timestamp',
+        date_format=None,
+        column_map={
+            'open': ['Open'],
+            'high': ['High'],
+            'low': ['Low'],
+            'close': ['Close'],
+            'volume': ['Volume']
+        }
+    )
+    
+    # Create emitter
+    bar_emitter = BarEmitter("backtest_bar_emitter", event_bus)
+    bar_emitter.start()
+    
+    # Create data handler
+    data_handler = HistoricalDataHandler(data_source, bar_emitter)
+    
+    # Create strategy
+    strategy = MovingAverageCrossoverStrategy(
+        name="ma_crossover",
+        symbols=symbols,
+        fast_window=fast_window,
+        slow_window=slow_window
+    )
+    strategy.set_event_bus(event_bus)
+    
+    # Create portfolio
+    portfolio = PortfolioManager(initial_cash=100000.0, event_bus=event_bus)
+    
+    # Create risk manager
+    risk_manager = SimpleRiskManager(
+        portfolio=portfolio,
+        event_bus=event_bus,
+        fixed_size=fixed_position_size
+    )
+    
+    # Create execution components
+    broker = SimulatedBroker(fill_emitter=event_bus)
+    execution_engine = ExecutionEngine(broker_interface=broker, event_bus=event_bus)
+    
+    # Register components
+    event_manager.register_component('strategy', strategy, [EventType.BAR])
+    event_manager.register_component('risk', risk_manager, [EventType.SIGNAL])
+    event_manager.register_component('execution', execution_engine, [EventType.ORDER])
+    event_manager.register_component('portfolio', portfolio, [EventType.FILL])
+    
+    # Load data
+    for symbol in symbols:
+        data_handler.load_data(symbol, start_date=start_date, end_date=end_date, timeframe=timeframe)
+    
+    # Process data
+    equity_curve = []
+    
+    for symbol in symbols:
+        bar_count = 0
+        
+        # Process bars
+        while True:
+            bar = data_handler.get_next_bar(symbol)
+            if bar is None:
+                break
+            
+            # Update broker market data
+            broker.update_market_data(symbol, {"price": bar.get_close()})
+            
+            # Record equity
+            equity_curve.append({
+                'timestamp': bar.get_timestamp(),
+                'equity': portfolio.get_equity({symbol: bar.get_close()})
+            })
+            
+            bar_count += 1
+            
+            if bar_count % 100 == 0:
+                logger.info(f"Processed {bar_count} bars for {symbol}")
+        
+        logger.info(f"Completed processing {bar_count} bars for {symbol}")
+    
+    # Calculate performance stats
+    stats = calculate_portfolio_stats(portfolio, equity_curve)
+    
+    # Compile results
+    results = {
+        'initial_equity': stats['initial_equity'],
+        'final_equity': stats['final_equity'],
+        'return': stats['total_return'],
+        'return_pct': stats['total_return'] * 100,
+        'annual_return': stats['annual_return'] * 100,
+        'max_drawdown': stats['max_drawdown'] * 100,
+        'sharpe_ratio': stats['sharpe_ratio'],
+        'trade_count': stats['trades'],
+        'signal_count': len(tracker.events[EventType.SIGNAL]),
+        'order_count': len(tracker.events[EventType.ORDER])
+    }
+    
+    return results, tracker, portfolio, equity_curve
 
 #################################################
 # Moving Average Crossover Strategy
@@ -226,7 +456,6 @@ class MovingAverageCrossoverStrategy:
         self.last_ma_values = {symbol: {'fast': None, 'slow': None} for symbol in self.symbols}
         self.signals = []
 
-
 #################################################
 # Walk-Forward Optimizer
 #################################################
@@ -267,7 +496,19 @@ class WalkForwardOptimizer:
         """
         # Get data date range (handles None values)
         symbol = data_handler.get_symbols()[0]  # Use first symbol
-        all_bars = list(data_handler.bars_history.get(symbol, []))
+        
+        # Reset data handler and collect bars
+        data_handler.reset()
+        all_bars = []
+        while True:
+            bar = data_handler.get_next_bar(symbol)
+            if bar is None:
+                break
+            all_bars.append(bar)
+        
+        # Reset data handler again
+        data_handler.reset()
+        
         if not all_bars:
             logger.warning("No data available for optimization")
             return None
@@ -435,7 +676,6 @@ class WalkForwardOptimizer:
         items = eval(key)
         return dict(items)
 
-
 #################################################
 # 1. Regime Detection
 #################################################
@@ -466,7 +706,7 @@ def run_walk_forward_optimization(data_dir, symbols, start_date, end_date, timef
         'slow_window': [20, 30, 40, 50]
     }
     
-    # Create data handler
+    # Create data source with timezone handling
     data_source = CSVDataSource(
         data_dir=data_dir,
         filename_pattern='{symbol}_{timeframe}.csv',
@@ -488,10 +728,34 @@ def run_walk_forward_optimization(data_dir, symbols, start_date, end_date, timef
     for symbol in symbols:
         data_handler.load_data(symbol, start_date=start_date, end_date=end_date, timeframe=timeframe)
     
+    # Debug output to show what data is available
+    for symbol in symbols:
+        print(f"Symbol {symbol} data:")
+        data_handler.reset()
+        bar_count = 0
+        start_date_seen = None
+        end_date_seen = None
+        
+        while True:
+            bar = data_handler.get_next_bar(symbol)
+            if bar is None:
+                break
+            bar_count += 1
+            
+            if bar_count == 1:
+                start_date_seen = bar.get_timestamp()
+            end_date_seen = bar.get_timestamp()
+        
+        print(f"  Bars: {bar_count}")
+        print(f"  Date range: {start_date_seen} to {end_date_seen}")
+        
+        # Reset data handler
+        data_handler.reset()
+    
     # Create walk-forward optimizer
     optimizer = WalkForwardOptimizer(train_size=0.6, test_size=0.4, windows=3)
     
-    # Define evaluation function
+    # Define evaluation function that handles date range properly
     def evaluate_params(params, data_handler, period_start, period_end):
         """
         Run backtest with given parameters and return score.
@@ -510,6 +774,28 @@ def run_walk_forward_optimization(data_dir, symbols, start_date, end_date, timef
         
         print(f"\nTesting parameters: Fast MA: {fast_window}, Slow MA: {slow_window}")
         print(f"Period: {period_start} to {period_end}")
+        
+        # Count bars in date range to check if we have enough data
+        symbol = symbols[0]
+        data_handler.reset()
+        
+        bars_in_range = []
+        while True:
+            bar = data_handler.get_next_bar(symbol)
+            if bar is None:
+                break
+            timestamp = bar.get_timestamp()
+            if (period_start is None or timestamp >= period_start) and \
+               (period_end is None or timestamp <= period_end):
+                bars_in_range.append(bar)
+        
+        # Reset data handler
+        data_handler.reset()
+        
+        # If not enough data in range, return low score
+        if len(bars_in_range) < 2:
+            print(f"Not enough data in range {period_start} to {period_end}")
+            return float('-inf')
         
         # Run backtest with these parameters
         results, _, _, equity_curve = run_backtest(
@@ -1490,6 +1776,11 @@ def compare_regime_vs_standard(data_dir, symbols, start_date, end_date, timefram
         timeframe=timeframe
     )
     
+    # Add error handling
+    if standard_results is None:
+        print("Standard optimization failed. Please check data and parameters.")
+        return None
+        
     standard_params = standard_results['best_params']
     
     # 2. Run regime-based optimization
@@ -1569,7 +1860,6 @@ if __name__ == "__main__":
     TIMEFRAME = "1m"
     
     # Run demo
-    
     compare_regime_vs_standard(
         data_dir=DATA_DIR,
         symbols=[SYMBOL],
@@ -1577,3 +1867,5 @@ if __name__ == "__main__":
         end_date=END_DATE,
         timeframe=TIMEFRAME
     )
+
+   
