@@ -354,165 +354,7 @@ class DummyStrategy:
         self.bar_count = {symbol: 0 for symbol in self.symbols}
         self.initialized = {symbol: False for symbol in self.symbols}
         
-# class DummyStrategy:
-#     """
-#     Dummy strategy that generates signals based on price movements in synthetic data.
-#     Used for validation purposes of the event system.
-#     """
-    
-#     def __init__(self, name, symbols, fast_window=5, slow_window=20):
-#         """
-#         Initialize the dummy strategy.
-        
-#         Args:
-#             name: Strategy name
-#             symbols: List of symbols to trade
-#             fast_window: Short-term price window for trend detection
-#             slow_window: Long-term price window for trend detection
-#         """
-#         self.name = name
-#         self.event_bus = None
-#         self.symbols = symbols if isinstance(symbols, list) else [symbols]
-#         self.signals = []
-        
-#         # Windows for trend detection
-#         self.fast_window = fast_window
-#         self.slow_window = slow_window
-        
-#         # Store price history and last signal direction
-#         self.price_history = {symbol: [] for symbol in self.symbols}
-#         self.last_signal = {symbol: None for symbol in self.symbols}
-        
-#         # Debug counter
-#         self.bar_count = {symbol: 0 for symbol in self.symbols}
-    
-#     def set_event_bus(self, event_bus):
-#         """Set the event bus."""
-#         self.event_bus = event_bus
-#         return self
-    
-#     def _calculate_trend(self, prices):
-#         """
-#         Calculate trend based on price slope.
-        
-#         Args:
-#             prices: List of closing prices
-            
-#         Returns:
-#             int: 1 for uptrend, -1 for downtrend, 0 for no clear trend
-#         """
-#         if len(prices) < self.slow_window:
-#             return 0  # Not enough data
-            
-#         # Calculate short-term and long-term average slopes
-#         fast_prices = prices[-self.fast_window:]
-#         fast_slope = (fast_prices[-1] - fast_prices[0]) / len(fast_prices)
-        
-#         slow_prices = prices[-self.slow_window:]
-#         slow_slope = (slow_prices[-1] - slow_prices[0]) / len(slow_prices)
-        
-#         # Determine trend based on slope relationship
-#         trend_threshold = 0.01  # Minimum slope to consider a trend
-        
-#         if fast_slope > trend_threshold and fast_slope > slow_slope:
-#             return 1  # Uptrend
-#         elif fast_slope < -trend_threshold and fast_slope < slow_slope:
-#             return -1  # Downtrend
-#         else:
-#             return 0  # No clear trend
 
-#     def on_bar(self, event):
-#         """Process a bar event and generate signals based on price movements."""
-#         if not isinstance(event, BarEvent):
-#             return None
-
-#         symbol = event.get_symbol()
-#         if symbol not in self.symbols:
-#             return None
-
-#         # Update bar counter for debugging
-#         self.bar_count[symbol] += 1
-
-#         # Store price data
-#         close_price = event.get_close()
-#         self.price_history[symbol].append(close_price)
-
-#         # Keep history manageable
-#         max_history = max(self.fast_window, self.slow_window) + 10
-#         if len(self.price_history[symbol]) > max_history:
-#             self.price_history[symbol] = self.price_history[symbol][-max_history:]
-
-#         # Check if we have enough data
-#         if len(self.price_history[symbol]) < self.slow_window:
-#             return None
-
-#         # Calculate current trend
-#         current_trend = self._calculate_trend(self.price_history[symbol])
-
-#         # Log trend periodically for debugging
-#         if self.bar_count[symbol] % 100 == 0:
-#             print(f"DEBUG: Bar {self.bar_count[symbol]} - Symbol: {symbol}, Trend: {current_trend}")
-
-#         # Generate signal on trend change
-#         signal = None
-
-#         # Skip first detection - only generate signals on actual trend changes
-#         # This means we need to have a previous signal to compare against
-#         if self.last_signal[symbol] is None:
-#             # Just record the initial trend without generating a signal
-#             if current_trend == 1:
-#                 self.last_signal[symbol] = SignalEvent.BUY
-#             elif current_trend == -1:
-#                 self.last_signal[symbol] = SignalEvent.SELL
-#             return None
-
-#         # Only generate signal if trend has changed
-#         last_sig = self.last_signal[symbol]
-
-#         if current_trend == 1 and last_sig != SignalEvent.BUY:
-#             # Uptrend detected - generate buy signal
-#             signal = SignalEvent(
-#                 signal_value=SignalEvent.BUY,
-#                 price=close_price,
-#                 symbol=symbol,
-#                 rule_id=self.name,
-#                 confidence=1.0,
-#                 metadata={'calculated_trend': current_trend},
-#                 timestamp=event.get_timestamp()
-#             )
-#             self.last_signal[symbol] = SignalEvent.BUY
-#             print(f"Generated BUY signal for {symbol} at {close_price:.2f}, bar {self.bar_count[symbol]}")
-
-#         elif current_trend == -1 and last_sig != SignalEvent.SELL:
-#             # Downtrend detected - generate sell signal
-#             signal = SignalEvent(
-#                 signal_value=SignalEvent.SELL,
-#                 price=close_price,
-#                 symbol=symbol,
-#                 rule_id=self.name,
-#                 confidence=1.0,
-#                 metadata={'calculated_trend': current_trend},
-#                 timestamp=event.get_timestamp()
-#             )
-#             self.last_signal[symbol] = SignalEvent.SELL
-#             print(f"Generated SELL signal for {symbol} at {close_price:.2f}, bar {self.bar_count[symbol]}")
-
-#         # Emit signal if generated
-#         if signal:
-#             self.signals.append(signal)
-#             if self.event_bus:
-#                 self.event_bus.emit(signal)
-#             return signal
-            
-#         return None
-    
-#     def reset(self):
-#         """Reset the strategy state."""
-#         self.signals = []
-#         self.price_history = {symbol: [] for symbol in self.symbols}
-#         self.last_signal = {symbol: None for symbol in self.symbols}
-#         self.bar_count = {symbol: 0 for symbol in self.symbols}
-        
 class EventTracker:
     """Utility to track events passing through the system."""
     
@@ -552,6 +394,8 @@ class EventTracker:
             event_type.name: len(events)
             for event_type, events in self.events.items()
         }
+
+
 
 
 def run_backtest(data_dir, symbols=None, start_date=None, end_date=None,
@@ -728,6 +572,7 @@ def run_backtest(data_dir, symbols=None, start_date=None, end_date=None,
     
     # Process bars for each symbol
     equity_curve = []
+    last_prices = {}  # Store last known prices for each symbol
     
     # Go through data chronologically
     for symbol in symbols:
@@ -740,10 +585,14 @@ def run_backtest(data_dir, symbols=None, start_date=None, end_date=None,
                 break
             
             # Update broker's market data with current price
-            broker.update_market_data(symbol, {"price": bar.get_close()})
+            current_price = bar.get_close()
+            broker.update_market_data(symbol, {"price": current_price})
+            
+            # Store last known price
+            last_prices[symbol] = current_price
             
             # Record equity with current price
-            market_prices = {symbol: bar.get_close()}
+            market_prices = {symbol: current_price}
             equity_curve.append({
                 'timestamp': bar.get_timestamp(),
                 'equity': portfolio.get_equity(market_prices)
@@ -756,6 +605,51 @@ def run_backtest(data_dir, symbols=None, start_date=None, end_date=None,
         
         logger.info(f"Completed processing {bar_count} bars for {symbol}")
         logger.info(f"Final Portfolio Cash: ${portfolio.cash:,.2f}")
+    
+    # Close all positions at the end of the backtest
+    def close_all_positions(portfolio, broker, event_bus, last_prices):
+        """Close all open positions at the end of the backtest."""
+        for symbol, position in portfolio.get_all_positions().items():
+            if position.quantity != 0:
+                # Get the last known price
+                price = last_prices.get(symbol, 0)
+                if price <= 0:
+                    continue
+
+                print(f"Closing position at end of backtest: {symbol}, {position.quantity} shares at ${price:.2f}")
+
+                # Create appropriate order to close position
+                if position.quantity > 0:  # Long position
+                    close_order = create_order_event(
+                        symbol=symbol,
+                        order_type="MARKET",
+                        direction="SELL",
+                        quantity=position.quantity,
+                        price=price
+                    )
+                else:  # Short position
+                    close_order = create_order_event(
+                        symbol=symbol,
+                        order_type="MARKET",
+                        direction="BUY",
+                        quantity=abs(position.quantity),
+                        price=price
+                    )
+
+                # Emit the order through the event bus instead of placing directly
+                if event_bus:
+                    print(f"Emitting closing order: {close_order.get_symbol()} {close_order.get_direction()} {close_order.get_quantity()} @ {close_order.get_price():.2f}")
+                    event_bus.emit(close_order)
+                else:
+                    # Fall back to direct placement if no event bus
+                    broker.place_order(close_order)
+
+        print("All positions closed at end of backtest")
+ 
+
+    # Close all positions
+    # Close all positions
+    close_all_positions(portfolio, broker, event_bus, last_prices)
     
     # --- Calculate Results ---
     
@@ -819,7 +713,7 @@ def run_backtest(data_dir, symbols=None, start_date=None, end_date=None,
         plt.close()
         print("\nEquity curve saved to 'equity_curve.png'")
     
-    return results, tracker, portfolio
+    return results, tracker, portfolio    
 
 
 def run_backtest_with_synthetic_data(data_dir=None, 
