@@ -12,6 +12,7 @@ import datetime
 import logging
 import itertools
 import pytz  # Added pytz for timezone handling
+import random 
 from enum import Enum
 from typing import Dict, Any, List, Optional, Tuple
 from collections import defaultdict
@@ -479,24 +480,25 @@ class WalkForwardOptimizer:
         self.test_size = test_size
         self.windows = windows
         self.results = []
-        
+
+
     def optimize(self, param_grid, data_handler, evaluation_func, start_date=None, end_date=None):
         """
         Perform walk-forward optimization.
-        
+
         Args:
             param_grid: Dictionary mapping parameter names to possible values
             data_handler: Data handler with loaded data
             evaluation_func: Function to evaluate parameter combinations
             start_date: Start date for optimization
             end_date: End date for optimization
-            
+
         Returns:
             dict: Optimization results with best parameters and performance
         """
         # Get data date range (handles None values)
         symbol = data_handler.get_symbols()[0]  # Use first symbol
-        
+
         # Reset data handler and collect bars
         data_handler.reset()
         all_bars = []
@@ -505,85 +507,118 @@ class WalkForwardOptimizer:
             if bar is None:
                 break
             all_bars.append(bar)
-        
+
         # Reset data handler again
         data_handler.reset()
-        
+
         if not all_bars:
             logger.warning("No data available for optimization")
             return None
-            
+
         # Sort bars by timestamp
         all_bars.sort(key=lambda bar: bar.get_timestamp())
-        
-        # Get date range
-        if start_date is None:
-            start_date = all_bars[0].get_timestamp()
-        if end_date is None:
-            end_date = all_bars[-1].get_timestamp()
-            
-        logger.info(f"Walk-forward optimization from {start_date} to {end_date}")
-        
+
+        # Get date range from actual bar data
+        first_bar_time = all_bars[0].get_timestamp()
+        last_bar_time = all_bars[-1].get_timestamp()
+
+        # Override with provided dates if specified
+        actual_start = first_bar_time if start_date is None else pd.to_datetime(start_date)
+        actual_end = last_bar_time if end_date is None else pd.to_datetime(end_date)
+
+        # Ensure both dates have the same timezone info
+        if first_bar_time.tzinfo is not None:
+            # Data has timezone info, make sure dates do too
+            if actual_start.tzinfo is None:
+                actual_start = actual_start.replace(tzinfo=first_bar_time.tzinfo)
+            if actual_end.tzinfo is None:
+                actual_end = actual_end.replace(tzinfo=first_bar_time.tzinfo)
+        else:
+            # Data is timezone naive, make dates naive too
+            if actual_start.tzinfo is not None:
+                actual_start = actual_start.replace(tzinfo=None)
+            if actual_end.tzinfo is not None:
+                actual_end = actual_end.replace(tzinfo=None)
+
+        logger.info(f"Walk-forward optimization from {actual_start} to {actual_end}")
+
         # Create time-based windows
         window_results = []
-        date_range = (end_date - start_date).total_seconds()
-        window_size = date_range / self.windows
-        
-        for i in range(self.windows):
-            # Calculate window dates
-            window_start = start_date + datetime.timedelta(seconds=i * window_size)
-            window_end = start_date + datetime.timedelta(seconds=(i + 1) * window_size)
-            
-            # Calculate train/test split within window
-            split_point = window_start + datetime.timedelta(seconds=window_size * self.train_size)
-            
-            train_start = window_start
-            train_end = split_point
-            test_start = split_point
-            test_end = window_end
-            
-            logger.info(f"\nWindow {i+1}/{self.windows}:")
-            logger.info(f"  Train: {train_start} to {train_end}")
-            logger.info(f"  Test:  {test_start} to {test_end}")
-            
-            # Grid search on training data
-            best_params, best_score = self._grid_search(
-                param_grid, 
-                data_handler,
-                evaluation_func,
-                train_start, 
-                train_end
-            )
-            
-            # Test best parameters on test data
-            test_score = evaluation_func(
-                best_params, 
-                data_handler, 
-                test_start, 
-                test_end
-            )
-            
-            logger.info(f"  Best parameters: {best_params}")
-            logger.info(f"  Train score: {best_score:.4f}, Test score: {test_score:.4f}")
-            
-            # Store window results
-            window_results.append({
-                'window': i + 1,
-                'params': best_params,
-                'train_score': best_score,
-                'test_score': test_score,
-                'train_period': (train_start, train_end),
-                'test_period': (test_start, test_end)
-            })
-        
+        try:
+            # Calculate date range in seconds
+            date_range = (actual_end - actual_start).total_seconds()
+            window_size = date_range / self.windows
+
+            for i in range(self.windows):
+                # Calculate window dates
+                window_start = actual_start + datetime.timedelta(seconds=i * window_size)
+                window_end = actual_start + datetime.timedelta(seconds=(i + 1) * window_size)
+
+                # Calculate train/test split within window
+                split_point = window_start + datetime.timedelta(seconds=window_size * self.train_size)
+
+                train_start = window_start
+                train_end = split_point
+                test_start = split_point
+                test_end = window_end
+
+                logger.info(f"\nWindow {i+1}/{self.windows}:")
+                logger.info(f"  Train: {train_start} to {train_end}")
+                logger.info(f"  Test:  {test_start} to {test_end}")
+
+                # Grid search on training data
+                best_params, best_score = self._grid_search(
+                    param_grid, 
+                    data_handler,
+                    evaluation_func,
+                    train_start, 
+                    train_end
+                )
+
+                # Test best parameters on test data
+                test_score = evaluation_func(
+                    best_params, 
+                    data_handler, 
+                    test_start, 
+                    test_end
+                )
+
+                logger.info(f"  Best parameters: {best_params}")
+                logger.info(f"  Train score: {best_score:.4f}, Test score: {test_score:.4f}")
+
+                # Store window results
+                window_results.append({
+                    'window': i + 1,
+                    'params': best_params,
+                    'train_score': best_score,
+                    'test_score': test_score,
+                    'train_period': (train_start, train_end),
+                    'test_period': (test_start, test_end)
+                })
+
+        except Exception as e:
+            logger.error(f"Error in optimization: {e}")
+            import traceback
+            traceback.print_exc()
+            # Return best parameters found so far if any
+            if window_results:
+                # Use the best parameters from the windows we managed to complete
+                best_window = max(window_results, key=lambda x: x['test_score'])
+                return {
+                    'best_params': best_window['params'],
+                    'best_avg_score': best_window['test_score'],
+                    'window_results': window_results
+                }
+            return None
+
         # Aggregate results across windows
         param_scores = defaultdict(list)
-        
+
         # Track test performance for each parameter set
         for result in window_results:
             params_key = self._params_to_key(result['params'])
             param_scores[params_key].append(result['test_score'])
-        
+
         # Calculate average performance
         avg_scores = {}
         for params_key, scores in param_scores.items():
@@ -595,11 +630,15 @@ class WalkForwardOptimizer:
                 'std_score': np.std(scores),
                 'scores': scores
             }
-        
+
         # Find best overall parameters (based on average test score)
+        if not avg_scores:
+            logger.error("No valid parameter combinations found")
+            return None
+
         best_key = max(avg_scores.keys(), key=lambda k: avg_scores[k]['avg_score'])
         best_overall = avg_scores[best_key]
-        
+
         # Format results
         aggregated_results = {
             'best_params': best_overall['params'],
@@ -610,12 +649,15 @@ class WalkForwardOptimizer:
             'window_results': window_results,
             'all_params': [avg_scores[k] for k in avg_scores]
         }
-        
+
         # Sort all parameter results by average score (descending)
         aggregated_results['all_params'].sort(key=lambda x: x['avg_score'], reverse=True)
+
+        return aggregated_results        
+ 
+
         
-        return aggregated_results
-        
+ 
     def _grid_search(self, param_grid, data_handler, evaluation_func, start_date, end_date):
         """
         Perform grid search on a specific time period.
@@ -759,99 +801,53 @@ def run_walk_forward_optimization(data_dir, symbols, start_date, end_date, timef
     def evaluate_params(params, data_handler, period_start, period_end):
         """
         Run backtest with given parameters and return score.
-        
+
         Args:
             params: Strategy parameters
             data_handler: Data handler with loaded data
             period_start: Start date for evaluation
             period_end: End date for evaluation
-            
+
         Returns:
             float: Performance score (Sharpe ratio)
         """
         fast_window = params['fast_window']
         slow_window = params['slow_window']
-        
+
         print(f"\nTesting parameters: Fast MA: {fast_window}, Slow MA: {slow_window}")
         print(f"Period: {period_start} to {period_end}")
-        
-        # Count bars in date range to check if we have enough data
-        symbol = symbols[0]
-        data_handler.reset()
-        
-        bars_in_range = []
-        while True:
-            bar = data_handler.get_next_bar(symbol)
-            if bar is None:
-                break
-            timestamp = bar.get_timestamp()
-            if (period_start is None or timestamp >= period_start) and \
-               (period_end is None or timestamp <= period_end):
-                bars_in_range.append(bar)
-        
-        # Reset data handler
-        data_handler.reset()
-        
-        # If not enough data in range, return low score
-        if len(bars_in_range) < 2:
-            print(f"Not enough data in range {period_start} to {period_end}")
-            return float('-inf')
-        
-        # Run backtest with these parameters
-        results, _, _, equity_curve = run_backtest(
-            data_dir=data_dir,
-            symbols=symbols,
-            start_date=period_start,
-            end_date=period_end,
-            timeframe=timeframe,
-            fast_window=fast_window,
-            slow_window=slow_window,
-            fixed_position_size=100
-        )
-        
-        # Calculate score (could be Sharpe ratio, returns, etc.)
-        if not results:
-            return float('-inf')
-            
-        # Use Sharpe ratio as score (could use other metrics)
-        score = results.get('sharpe_ratio', 0)
-        
-        print(f"Parameters: Fast MA: {fast_window}, Slow MA: {slow_window}, Score: {score:.4f}")
-        
-        return score
-    
-    # Run walk-forward optimization
-    results = optimizer.optimize(param_grid, data_handler, evaluate_params, start_date, end_date)
-    
-    if not results:
-        print("Optimization failed - no data available")
-        return None
-    
-    # Print optimization results
-    print("\n=== Walk-Forward Optimization Results ===")
-    print(f"Best Parameters: {results['best_params']}")
-    print(f"Average Score: {results['best_avg_score']:.4f}")
-    print(f"Score Range: {results['best_min_score']:.4f} to {results['best_max_score']:.4f}")
-    print(f"Score Standard Deviation: {results['best_std_score']:.4f}")
-    
-    # Print window results
-    print("\nResults by Window:")
-    for window in results['window_results']:
-        print(f"Window {window['window']}:")
-        print(f"  Train: {window['train_period'][0]} to {window['train_period'][1]}")
-        print(f"  Test:  {window['test_period'][0]} to {window['test_period'][1]}")
-        print(f"  Parameters: {window['params']}")
-        print(f"  Train Score: {window['train_score']:.4f}, Test Score: {window['test_score']:.4f}")
-    
-    # Print top 3 parameter sets
-    print("\nTop 3 Parameter Sets (by average test score):")
-    for i, result in enumerate(results['all_params'][:3]):
-        params = result['params']
-        score = result['avg_score']
-        print(f"{i+1}. Fast MA: {params['fast_window']}, Slow MA: {params['slow_window']}, Avg Score: {score:.4f}")
-    
-    return results
 
+        try:
+            # Run backtest directly with the date parameters
+            # The backtest function should handle timezone consistency internally
+            results, _, _, equity_curve = run_backtest(
+                data_dir=data_dir,
+                symbols=symbols,
+                start_date=period_start,
+                end_date=period_end,
+                timeframe=timeframe,
+                fast_window=fast_window,
+                slow_window=slow_window,
+                fixed_position_size=100
+            )
+
+            # Calculate score (could be Sharpe ratio, returns, etc.)
+            if not results:
+                return float('-inf')
+
+            # Use Sharpe ratio as score (could use other metrics)
+            score = results.get('sharpe_ratio', 0)
+
+            print(f"Parameters: Fast MA: {fast_window}, Slow MA: {slow_window}, Score: {score:.4f}")
+
+            return score
+
+        except Exception as e:
+            print(f"Error evaluating parameters: {e}")
+            return float('-inf')
+
+
+    
 class MarketRegime(Enum):
     """Enumeration of market regime types."""
     UPTREND = "uptrend"
@@ -1024,6 +1020,587 @@ class RegimeDetector:
         self.regime_history = {}
 
 
+class EnhancedRegimeDetector:
+    """
+    Enhanced market regime detector that uses multiple indicators to identify regimes.
+    """
+    
+    def __init__(self, lookback_window=30, trend_lookback=50, volatility_lookback=20,
+                trend_threshold=0.03, volatility_threshold=0.012, 
+                sideways_threshold=0.015, debug=False):
+        """
+        Initialize the enhanced regime detector.
+        
+        Args:
+            lookback_window: Primary window for regime analysis
+            trend_lookback: Window for trend strength calculation
+            volatility_lookback: Window for volatility calculation
+            trend_threshold: Minimum price change for trend detection
+            volatility_threshold: Threshold for high volatility regime
+            sideways_threshold: Max range for sideways market
+            debug: Enable debug output
+        """
+        self.lookback_window = lookback_window
+        self.trend_lookback = trend_lookback
+        self.volatility_lookback = volatility_lookback
+        self.trend_threshold = trend_threshold
+        self.volatility_threshold = volatility_threshold
+        self.sideways_threshold = sideways_threshold
+        self.debug = debug
+        
+        # History tracking
+        self.price_history = {}  # symbol -> list of prices
+        self.regime_history = {}  # symbol -> list of (timestamp, regime) tuples
+        self.indicator_values = {}  # symbol -> dict of indicator values
+        
+        logger.info(f"Enhanced Regime Detector initialized with: lookback={lookback_window}, "
+                   f"trend_lookback={trend_lookback}, volatility_lookback={volatility_lookback}")
+        logger.info(f"Thresholds: trend={trend_threshold}, volatility={volatility_threshold}, "
+                   f"sideways={sideways_threshold}")
+    
+    def update(self, bar):
+        """
+        Update detector with new price data and detect current regime.
+        
+        Args:
+            bar: Bar event with price data
+            
+        Returns:
+            MarketRegime: Detected market regime
+        """
+        symbol = bar.get_symbol()
+        close_price = bar.get_close()
+        timestamp = bar.get_timestamp()
+        
+        # Initialize history if needed
+        if symbol not in self.price_history:
+            self.price_history[symbol] = []
+            self.regime_history[symbol] = []
+            self.indicator_values[symbol] = {}
+            
+        # Add price to history
+        self.price_history[symbol].append((timestamp, close_price))
+        
+        # Keep history limited to reasonable size
+        max_lookback = max(self.lookback_window, self.trend_lookback, self.volatility_lookback) * 2
+        if len(self.price_history[symbol]) > max_lookback:
+            self.price_history[symbol] = self.price_history[symbol][-max_lookback:]
+            
+        # Need enough history for regime detection
+        if len(self.price_history[symbol]) < max(self.lookback_window, self.trend_lookback):
+            regime = MarketRegime.UNKNOWN
+            self.regime_history[symbol].append((timestamp, regime))
+            return regime
+            
+        # Extract prices
+        prices = [price for _, price in self.price_history[symbol]]
+        recent_prices = prices[-self.lookback_window:]
+        
+        # Calculate key metrics
+        # 1. Short-term trend
+        short_term_change = (recent_prices[-1] / recent_prices[0]) - 1
+        
+        # 2. Long-term trend
+        if len(prices) >= self.trend_lookback:
+            trend_prices = prices[-self.trend_lookback:]
+            long_term_change = (trend_prices[-1] / trend_prices[0]) - 1
+        else:
+            long_term_change = short_term_change
+        
+        # 3. Short-term volatility (stdev of returns)
+        returns = []
+        for i in range(1, min(len(recent_prices), self.volatility_lookback)):
+            ret = (recent_prices[i] / recent_prices[i-1]) - 1
+            returns.append(ret)
+        
+        volatility = np.std(returns) * np.sqrt(252) if returns else 0  # Annualized
+        
+        # 4. Price range
+        price_range = (max(recent_prices) - min(recent_prices)) / np.mean(recent_prices)
+        
+        # 5. Trend consistency - how consistently prices are moving in one direction
+        ups = sum(1 for i in range(1, len(recent_prices)) if recent_prices[i] > recent_prices[i-1])
+        trend_consistency = abs((ups / (len(recent_prices) - 1)) - 0.5) * 2  # 0 to 1 scale
+        
+        # Store indicator values for debugging
+        self.indicator_values[symbol] = {
+            'short_term_change': short_term_change,
+            'long_term_change': long_term_change,
+            'volatility': volatility,
+            'price_range': price_range,
+            'trend_consistency': trend_consistency
+        }
+        
+        # Print debug information
+        if self.debug:
+            logger.info(f"Regime indicators for {symbol} at {timestamp}:")
+            logger.info(f"  Short-term change: {short_term_change:.2%}")
+            logger.info(f"  Long-term change: {long_term_change:.2%}")
+            logger.info(f"  Volatility: {volatility:.2%}")
+            logger.info(f"  Price range: {price_range:.2%}")
+            logger.info(f"  Trend consistency: {trend_consistency:.2f}")
+        
+        # Detect regime based on multiple indicators
+        if volatility > self.volatility_threshold:
+            # High volatility regime
+            regime = MarketRegime.VOLATILE
+        elif abs(short_term_change) < self.sideways_threshold and price_range < self.sideways_threshold * 2:
+            # Low volatility, low directional movement = sideways
+            regime = MarketRegime.SIDEWAYS
+        elif short_term_change > self.trend_threshold and long_term_change > 0:
+            # Strong upward movement & consistent with longer trend = uptrend
+            regime = MarketRegime.UPTREND
+        elif short_term_change < -self.trend_threshold and long_term_change < 0:
+            # Strong downward movement & consistent with longer trend = downtrend
+            regime = MarketRegime.DOWNTREND
+        else:
+            # Default to sideways if no clear pattern
+            regime = MarketRegime.SIDEWAYS
+        
+        # Store regime
+        self.regime_history[symbol].append((timestamp, regime))
+        
+        if self.debug:
+            logger.info(f"Detected regime for {symbol} at {timestamp}: {regime.value}")
+        
+        return regime
+    
+    def get_current_regime(self, symbol):
+        """Get current regime for a symbol."""
+        if not symbol in self.regime_history or not self.regime_history[symbol]:
+            return MarketRegime.UNKNOWN
+        return self.regime_history[symbol][-1][1]
+    
+    def get_dominant_regime(self, symbol, lookback=None):
+        """Get the most common regime over a period."""
+        if not symbol in self.regime_history or not self.regime_history[symbol]:
+            return MarketRegime.UNKNOWN
+            
+        history = self.regime_history[symbol]
+        if lookback:
+            history = history[-lookback:]
+            
+        # Count occurrences of each regime
+        regime_counts = {}
+        for _, regime in history:
+            regime_counts[regime] = regime_counts.get(regime, 0) + 1
+            
+        # Find the most common regime
+        dominant_regime = max(regime_counts.items(), key=lambda x: x[1])[0]
+        return dominant_regime
+    
+    def get_regime_stability(self, symbol, lookback=None):
+        """Calculate how stable the regime has been (0-1 scale)."""
+        if not symbol in self.regime_history or not self.regime_history[symbol]:
+            return 0
+            
+        history = self.regime_history[symbol]
+        if lookback:
+            history = history[-lookback:]
+            
+        if len(history) <= 1:
+            return 1  # Only one regime, so it's stable
+            
+        # Count regime transitions
+        transitions = 0
+        for i in range(1, len(history)):
+            if history[i][1] != history[i-1][1]:
+                transitions += 1
+                
+        # Calculate stability (1 - transition rate)
+        stability = 1 - (transitions / (len(history) - 1))
+        return stability
+    
+    def get_regime_periods(self, symbol, start_date=None, end_date=None):
+        """
+        Get periods of different regimes for a symbol.
+        
+        Args:
+            symbol: Symbol to analyze
+            start_date: Start date for analysis
+            end_date: End date for analysis
+            
+        Returns:
+            dict: Dictionary mapping regime types to lists of (start, end) periods
+        """
+        if not symbol in self.regime_history:
+            return {}
+            
+        history = self.regime_history[symbol]
+        
+        # Filter by date range if specified
+        if start_date or end_date:
+            if start_date:
+                history = [(ts, regime) for ts, regime in history if ts >= start_date]
+            if end_date:
+                history = [(ts, regime) for ts, regime in history if ts <= end_date]
+                
+        if not history:
+            return {}
+            
+        # Find continuous periods of same regime
+        regime_periods = {}
+        
+        current_regime = history[0][1]
+        period_start = history[0][0]
+        
+        for i in range(1, len(history)):
+            timestamp, regime = history[i]
+            
+            # Regime change
+            if regime != current_regime:
+                # Store previous period
+                if current_regime not in regime_periods:
+                    regime_periods[current_regime] = []
+                regime_periods[current_regime].append((period_start, timestamp))
+                
+                # Start new period
+                current_regime = regime
+                period_start = timestamp
+        
+        # Add final period
+        if history:
+            if current_regime not in regime_periods:
+                regime_periods[current_regime] = []
+            regime_periods[current_regime].append((period_start, history[-1][0]))
+            
+        return regime_periods
+    
+    def print_regime_summary(self, symbol):
+        """Print a summary of regime detection for a symbol."""
+        if not symbol in self.regime_history or not self.regime_history[symbol]:
+            print(f"No regime history for {symbol}")
+            return
+            
+        # Count regimes
+        regime_counts = {}
+        for _, regime in self.regime_history[symbol]:
+            regime_counts[regime] = regime_counts.get(regime, 0) + 1
+            
+        total = len(self.regime_history[symbol])
+        
+        print(f"\n=== Regime Summary for {symbol} ===")
+        print(f"Total observations: {total}")
+        print("Regime distribution:")
+        for regime, count in regime_counts.items():
+            percentage = (count / total) * 100
+            print(f"  {regime.value:<10}: {count:>5} ({percentage:>6.2f}%)")
+            
+        # Calculate stability
+        stability = self.get_regime_stability(symbol)
+        print(f"Regime stability: {stability:.2f} (0-1 scale, higher is more stable)")
+        
+        # Get latest regime with duration
+        current_regime = self.get_current_regime(symbol)
+        current_streak = 0
+        for i in range(len(self.regime_history[symbol])-1, -1, -1):
+            if self.regime_history[symbol][i][1] == current_regime:
+                current_streak += 1
+            else:
+                break
+                
+        print(f"Current regime: {current_regime.value} (streak: {current_streak} bars)")
+    
+    def reset(self):
+        """Reset the detector state."""
+        self.price_history = {}
+        self.regime_history = {}
+        self.indicator_values = {}
+
+
+class RegimeSpecificOptimizer:
+    """
+    Optimizer that tunes strategy parameters specifically for each market regime.
+    """
+    
+    def __init__(self, regime_detector, grid_optimizer=None):
+        """
+        Initialize the regime-specific optimizer.
+        
+        Args:
+            regime_detector: Regime detector instance
+            grid_optimizer: Optional grid search optimizer instance
+        """
+        self.regime_detector = regime_detector
+        self.grid_optimizer = grid_optimizer or GridSearchOptimizer()
+        self.results = {}
+        
+    def optimize(self, param_grid, data_handler, evaluation_func, 
+                start_date=None, end_date=None, min_regime_bars=30,
+                optimize_metric='sharpe_ratio', min_improvement=0.1):
+        """
+        Perform regime-specific optimization.
+        
+        Args:
+            param_grid: Dictionary of parameter names to possible values
+            data_handler: Data handler with loaded data
+            evaluation_func: Function to evaluate parameter combinations
+            start_date: Start date for optimization
+            end_date: End date for optimization
+            min_regime_bars: Minimum bars required for a regime to be optimized
+            optimize_metric: Metric to optimize ('sharpe_ratio', 'return', 'max_drawdown')
+            min_improvement: Minimum improvement required to use regime-specific parameters
+            
+        Returns:
+            dict: Best parameters for each regime
+        """
+        symbol = data_handler.get_symbols()[0]  # Use first symbol
+        
+        # 1. Run regime detection on historical data
+        logger.info(f"Performing regime detection on historical data for {symbol}")
+        self._detect_regimes(data_handler, start_date, end_date)
+        
+        # Print a summary of detected regimes
+        self.regime_detector.print_regime_summary(symbol)
+        
+        # 2. Segment data by regime
+        regime_periods = self.regime_detector.get_regime_periods(symbol, start_date, end_date)
+        
+        # Print periods for each regime
+        logger.info("\nRegime Periods:")
+        for regime, periods in regime_periods.items():
+            total_days = sum((end - start).total_seconds() / (24 * 3600) for start, end in periods)
+            logger.info(f"  {regime.value}: {len(periods)} periods, {total_days:.1f} days")
+        
+        # 3. First, optimize parameters on the entire dataset (baseline)
+        logger.info("\n--- Optimizing Baseline Parameters (All Regimes) ---")
+        baseline_params, baseline_score = self._grid_search(
+            param_grid, 
+            data_handler,
+            evaluation_func,
+            start_date, 
+            end_date,
+            optimize_metric
+        )
+        
+        logger.info(f"Baseline parameters: {baseline_params}, Score: {baseline_score:.4f}")
+        
+        # 4. For each regime, optimize parameters
+        regime_params = {
+            MarketRegime.UNKNOWN: baseline_params  # Default to baseline for unknown
+        }
+        
+        for regime in list(MarketRegime):
+            if regime == MarketRegime.UNKNOWN:
+                continue  # Already set to baseline
+                
+            if regime not in regime_periods:
+                logger.info(f"No data for {regime.value} regime, using baseline parameters")
+                regime_params[regime] = baseline_params
+                continue
+                
+            # Count total bars in this regime
+            periods = regime_periods[regime]
+            bar_count = self._count_bars_in_periods(data_handler, symbol, periods)
+            
+            if bar_count < min_regime_bars:
+                logger.info(f"Skipping optimization for {regime.value} - insufficient data ({bar_count} bars)")
+                regime_params[regime] = baseline_params
+                continue
+                
+            logger.info(f"\n--- Optimizing for {regime.value} regime ({bar_count} bars) ---")
+            
+            # Optimize for this regime
+            try:
+                regime_best_params, regime_score = self._optimize_for_regime(
+                    param_grid, data_handler, evaluation_func, regime, periods, optimize_metric
+                )
+                
+                # Check if regime-specific parameters are better than baseline
+                improvement = (regime_score - baseline_score) / abs(baseline_score) if baseline_score != 0 else float('inf')
+                
+                if improvement >= min_improvement:
+                    logger.info(f"Best parameters for {regime.value}: {regime_best_params}, "
+                               f"Score: {regime_score:.4f} (Improvement: {improvement:.2%})")
+                    regime_params[regime] = regime_best_params
+                else:
+                    logger.info(f"Parameters for {regime.value} not better than baseline "
+                               f"(Score: {regime_score:.4f}, Improvement: {improvement:.2%})")
+                    regime_params[regime] = baseline_params
+            except Exception as e:
+                logger.error(f"Error optimizing for {regime.value}: {e}")
+                regime_params[regime] = baseline_params
+        
+        # Store and return results
+        self.results = {
+            'regime_parameters': regime_params,
+            'baseline_parameters': baseline_params,
+            'baseline_score': baseline_score,
+            'regime_periods': {r.value: periods for r, periods in regime_periods.items() if r in regime_periods}
+        }
+        
+        return regime_params
+    
+    def _detect_regimes(self, data_handler, start_date, end_date):
+        """Run regime detection on historical data."""
+        symbol = data_handler.get_symbols()[0]
+        
+        # Reset data handler to start of data
+        data_handler.reset()
+        
+        # Reset detector
+        self.regime_detector.reset()
+        
+        # Process each bar to detect regimes
+        bar_count = 0
+        while True:
+            bar = data_handler.get_next_bar(symbol)
+            if bar is None:
+                break
+                
+            # Skip bars outside date range
+            if start_date and bar.get_timestamp() < start_date:
+                continue
+            if end_date and bar.get_timestamp() > end_date:
+                break
+                
+            # Detect regime
+            self.regime_detector.update(bar)
+            bar_count += 1
+            
+            if bar_count % 100 == 0:
+                logger.debug(f"Processed {bar_count} bars for regime detection")
+        
+        logger.info(f"Processed {bar_count} bars for regime detection")
+        
+        # Reset data handler for optimization
+        data_handler.reset()
+    
+    def _count_bars_in_periods(self, data_handler, symbol, periods):
+        """Count total bars across multiple time periods."""
+        # Reset data handler
+        data_handler.reset()
+        
+        total_bars = 0
+        
+        # Process each bar
+        while True:
+            bar = data_handler.get_next_bar(symbol)
+            if bar is None:
+                break
+                
+            # Check if bar falls in any of the periods
+            timestamp = bar.get_timestamp()
+            for start, end in periods:
+                if start <= timestamp <= end:
+                    total_bars += 1
+                    break
+        
+        # Reset data handler
+        data_handler.reset()
+        
+        return total_bars
+    
+    def _optimize_for_regime(self, param_grid, data_handler, evaluation_func, regime, periods, optimize_metric):
+        """Optimize parameters for a specific regime."""
+        # Define regime-specific evaluation wrapper
+        def regime_evaluation(params):
+            # Evaluate only on bars in this regime
+            result = self._evaluate_in_periods(
+                params, data_handler, evaluation_func, periods
+            )
+            # Extract the metric we want to optimize
+            if isinstance(result, dict):
+                # If result is a dict, extract the metric
+                score = result.get(optimize_metric, float('-inf'))
+                # Handle some metrics where lower is better
+                if optimize_metric == 'max_drawdown':
+                    score = -score  # Negate drawdown so lower values are better
+            else:
+                # Assume result is already the score
+                score = result
+            return score
+        
+        # Run grid search with regime-specific evaluation
+        try:
+            param_combinations = []
+            for name, values in param_grid.items():
+                param_combinations.append(values)
+            
+            logger.info(f"Grid search: evaluating {len(list(itertools.product(*param_combinations)))} parameter combinations")
+            
+            # Run grid search
+            result = self.grid_optimizer.optimize(param_grid, regime_evaluation)
+            return result['best_params'], result['best_score']
+        except Exception as e:
+            logger.error(f"Error in regime optimization: {e}")
+            raise
+    
+    def _evaluate_in_periods(self, params, data_handler, evaluation_func, periods):
+        """Evaluate parameters only on bars within specific time periods."""
+        # Reset data handler
+        data_handler.reset()
+        
+        symbol = data_handler.get_symbols()[0]
+        bars_in_periods = []
+        
+        # Collect bars that fall within the specified periods
+        while True:
+            bar = data_handler.get_next_bar(symbol)
+            if bar is None:
+                break
+                
+            # Check if bar falls in any of the periods
+            timestamp = bar.get_timestamp()
+            for start, end in periods:
+                if start <= timestamp <= end:
+                    bars_in_periods.append(bar)
+                    break
+        
+        # Reset data handler
+        data_handler.reset()
+        
+        # If no bars in period, return low score
+        if not bars_in_periods:
+            return float('-inf')
+            
+        # Evaluate parameters on collected bars
+        return evaluation_func(params, bars_in_periods)
+        
+    def _grid_search(self, param_grid, data_handler, evaluation_func, start_date, end_date, optimize_metric):
+        """
+        Perform grid search on a specific time period.
+        
+        Args:
+            param_grid: Dictionary of parameters to test
+            data_handler: Data handler with loaded data
+            evaluation_func: Function to evaluate parameters
+            start_date: Start date for training
+            end_date: End date for training
+            optimize_metric: Metric to optimize
+            
+        Returns:
+            tuple: (best_params, best_score)
+        """
+        # Define evaluation wrapper for the metric
+        def metric_evaluation(params):
+            result = evaluation_func(params, data_handler, start_date, end_date)
+            if isinstance(result, dict):
+                # If result is a dict, extract the metric
+                score = result.get(optimize_metric, float('-inf'))
+                # Handle some metrics where lower is better
+                if optimize_metric == 'max_drawdown':
+                    score = -score  # Negate drawdown so lower values are better
+            else:
+                # Assume result is already the score
+                score = result
+            return score
+        
+        # Generate all parameter combinations for logging
+        param_combinations = []
+        for name, values in param_grid.items():
+            param_combinations.append(values)
+        
+        logger.info(f"Grid search: evaluating {len(list(itertools.product(*param_combinations)))} parameter combinations")
+        
+        # Run grid search
+        try:
+            result = self.grid_optimizer.optimize(param_grid, metric_evaluation)
+            return result['best_params'], result['best_score']
+        except Exception as e:
+            logger.error(f"Error in grid search: {e}")
+            raise        
+
 #################################################
 # 2. Regime-Based Strategy
 #################################################
@@ -1078,32 +1655,42 @@ class RegimeAwareStrategy:
             if self.active_regime[symbol] == regime:
                 logger.info(f"Applying new {regime.value} parameters to {symbol}: {parameters}")
                 self.strategy.set_parameters(parameters)
-    
+
     def on_bar(self, event):
         """
         Process a bar event with regime-specific parameters.
-        
+
         Args:
             event: Bar event to process
-            
+
         Returns:
             Signal event or None
         """
         symbol = event.get_symbol()
-        
+
         if symbol not in self.symbols:
             return None
-            
+
         # Detect current regime
         current_regime = self.regime_detector.update(event)
-        
+
         # Check if regime changed
         if current_regime != self.active_regime[symbol]:
+            # Log the regime change
+            print(f"\n*** REGIME CHANGE at {event.get_timestamp()}: {symbol} {self.active_regime[symbol]} -> {current_regime}")
+            print(f"    Switching parameters: {self.strategy.get_parameters()} -> {self.regime_parameters.get(current_regime, {})}")
+
             # Switch parameters
             self._switch_parameters(symbol, current_regime)
-            
+
+        # Log active parameters occasionally
+        if random.random() < 0.01:  # Log roughly 1% of the time
+            print(f"Active parameters for {symbol}: {self.strategy.get_parameters()}, Regime: {current_regime}")
+
         # Process with current parameters
         return self.strategy.on_bar(event)
+                
+
     
     def _switch_parameters(self, symbol, regime):
         """
@@ -1387,13 +1974,13 @@ def run_regime_optimization(data_dir, symbols, start_date, end_date, timeframe):
     if isinstance(symbols, str):
         symbols = [symbols]
     
-    # Define parameter grid
+    # Define parameter grid with wider ranges
     param_grid = {
-        'fast_window': [5, 10, 15, 20],
-        'slow_window': [20, 30, 40, 50]
+        'fast_window': [3, 5, 8, 10, 15, 20],
+        'slow_window': [15, 20, 30, 40, 50, 60]
     }
     
-    # Create data handler
+    # Create data source
     data_source = CSVDataSource(
         data_dir=data_dir,
         filename_pattern='{symbol}_{timeframe}.csv',
@@ -1415,120 +2002,107 @@ def run_regime_optimization(data_dir, symbols, start_date, end_date, timeframe):
     for symbol in symbols:
         data_handler.load_data(symbol, start_date=start_date, end_date=end_date, timeframe=timeframe)
     
-    # Create regime detector
-    regime_detector = RegimeDetector(
-        lookback_window=20,
-        trend_threshold=0.05,
-        volatility_threshold=0.015,
-        sideways_threshold=0.02
+    # Create enhanced regime detector with debug enabled
+    regime_detector = EnhancedRegimeDetector(
+        lookback_window=30,  # 30 bars for primary analysis
+        trend_lookback=50,   # 50 bars for trend analysis
+        volatility_lookback=20,  # 20 bars for volatility calculation
+        trend_threshold=0.03,    # 3% change for trend detection
+        volatility_threshold=0.015,  # 1.5% daily volatility (annualized)
+        sideways_threshold=0.02,  # 2% range for sideways market
+        debug=True  # Enable debug output
     )
     
     # Create grid search optimizer
     grid_optimizer = GridSearchOptimizer()
     
-    # Create regime optimizer
-    regime_optimizer = RegimeOptimizer(regime_detector, grid_optimizer)
+    # Create regime-specific optimizer
+    regime_optimizer = RegimeSpecificOptimizer(regime_detector, grid_optimizer)
     
-    # Define evaluation function for a set of bars
-    def evaluate_strategy_on_bars(params, bars):
+    # Define evaluation function for risk-adjusted returns
+    def evaluate_strategy(params, data_handler, start_date, end_date):
         """
-        Evaluate strategy performance on a specific set of bars.
+        Run backtest with given parameters and return performance metrics.
         
         Args:
             params: Strategy parameters
-            bars: List of bar events
+            data_handler: Data handler with loaded data
+            start_date: Start date for evaluation
+            end_date: End date for evaluation
             
         Returns:
-            float: Performance score
+            dict: Performance metrics dictionary
         """
-        # Create event system
-        event_bus = EventBus(use_weak_refs=False)
+        fast_window = params['fast_window']
+        slow_window = params['slow_window']
         
-        # Create strategy with given parameters
-        strategy = MovingAverageCrossoverStrategy(
-            name="ma_crossover",
-            symbols=symbols,
-            fast_window=params['fast_window'],
-            slow_window=params['slow_window']
-        )
-        strategy.set_event_bus(event_bus)
+        print(f"\nTesting parameters: Fast MA: {fast_window}, Slow MA: {slow_window}")
+        print(f"Period: {start_date} to {end_date}")
         
-        # Create portfolio
-        portfolio = PortfolioManager(initial_cash=100000.0, event_bus=event_bus)
-        
-        # Create risk manager
-        risk_manager = SimpleRiskManager(
-            portfolio=portfolio,
-            event_bus=event_bus,
-            fixed_size=100
-        )
-        
-        # Create execution components
-        broker = SimulatedBroker(fill_emitter=event_bus)
-        execution_engine = ExecutionEngine(broker_interface=broker, event_bus=event_bus)
-        
-        # Register components
-        event_manager = EventManager(event_bus)
-        event_manager.register_component('strategy', strategy, [EventType.BAR])
-        event_manager.register_component('risk', risk_manager, [EventType.SIGNAL])
-        event_manager.register_component('execution', execution_engine, [EventType.ORDER])
-        event_manager.register_component('portfolio', portfolio, [EventType.FILL])
-        
-        # Process bars
-        symbol = bars[0].get_symbol() if bars else symbols[0]
-        equity_curve = []
-        
-        for bar in bars:
-            # Update broker's market data
-            broker.update_market_data(symbol, {"price": bar.get_close()})
+        try:
+            # Run backtest
+            results, _, _, _ = run_backtest(
+                data_dir=data_dir,
+                symbols=symbols,
+                start_date=start_date,
+                end_date=end_date,
+                timeframe=timeframe,
+                fast_window=fast_window,
+                slow_window=slow_window,
+                fixed_position_size=100
+            )
             
-            # Emit bar event
-            event_bus.emit(bar)
+            if results is None:
+                print("Backtest failed")
+                return {
+                    'sharpe_ratio': float('-inf'),
+                    'return_pct': float('-inf'),
+                    'max_drawdown': float('inf')
+                }
             
-            # Record equity
-            equity_curve.append({
-                'timestamp': bar.get_timestamp(),
-                'equity': portfolio.get_equity({symbol: bar.get_close()})
-            })
-        
-        # Calculate performance
-        if len(equity_curve) < 2:
-            return float('-inf')
+            # Return performance metrics
+            metrics = {
+                'sharpe_ratio': results.get('sharpe_ratio', float('-inf')),
+                'return_pct': results.get('return_pct', float('-inf')),
+                'max_drawdown': results.get('max_drawdown', float('inf')),
+                'trade_count': results.get('trade_count', 0)
+            }
             
-        # Create DataFrame from equity curve
-        df = pd.DataFrame(equity_curve)
-        df.set_index('timestamp', inplace=True)
-        
-        # Calculate returns
-        df['returns'] = df['equity'].pct_change()
-        
-        # Calculate Sharpe ratio (or other metrics)
-        risk_free_rate = 0.01 / 252
-        excess_returns = df['returns'] - risk_free_rate
-        sharpe_ratio = excess_returns.mean() / df['returns'].std() * np.sqrt(252) if df['returns'].std() > 0 else 0
-        
-        return sharpe_ratio
+            print(f"Parameters: Fast MA: {fast_window}, Slow MA: {slow_window}, "
+                 f"Sharpe: {metrics['sharpe_ratio']:.2f}, Return: {metrics['return_pct']:.2f}%, "
+                 f"Drawdown: {metrics['max_drawdown']:.2f}%")
+            
+            return metrics
+            
+        except Exception as e:
+            print(f"Error evaluating parameters: {e}")
+            return {
+                'sharpe_ratio': float('-inf'),
+                'return_pct': float('-inf'),
+                'max_drawdown': float('inf')
+            }
     
-    # Run regime optimization
+    # Run regime-specific optimization
     regime_params = regime_optimizer.optimize(
         param_grid=param_grid,
         data_handler=data_handler,
-        evaluation_func=evaluate_strategy_on_bars,
+        evaluation_func=evaluate_strategy,
         start_date=start_date,
-        end_date=end_date
+        end_date=end_date,
+        min_regime_bars=100,  # Need at least 100 bars to optimize for a regime
+        optimize_metric='sharpe_ratio',  # Optimize for risk-adjusted returns
+        min_improvement=0.1  # Require at least 10% improvement over baseline
     )
     
     # Print optimization results
     print("\n=== Regime-Based Optimization Results ===")
-    for regime, params in regime_params.items():
-        print(f"{regime.value.capitalize()} Regime: {params}")
+    print(f"Baseline Parameters: {regime_optimizer.results['baseline_parameters']}")
+    print(f"Baseline Score: {regime_optimizer.results['baseline_score']:.4f}")
     
-    # Print regime distribution
-    regime_periods = regime_optimizer.results['regime_periods']
-    print("\nRegime Distribution:")
-    for regime, periods in regime_periods.items():
-        total_days = sum((end - start).days for start, end in periods)
-        print(f"  {regime.capitalize()}: {len(periods)} periods, {total_days} days")
+    print("\nRegime-Specific Parameters:")
+    for regime, params in regime_params.items():
+        is_baseline = params == regime_optimizer.results['baseline_parameters']
+        print(f"{regime.value}: {params}" + (" (using baseline)" if is_baseline else ""))
     
     return regime_optimizer.results
 
@@ -1752,7 +2326,6 @@ def run_regime_backtest(data_dir, symbols, start_date, end_date, timeframe, regi
     
     return results, tracker, portfolio
 
-
 def compare_regime_vs_standard(data_dir, symbols, start_date, end_date, timeframe):
     """
     Compare regime-based optimization with standard optimization.
@@ -1766,84 +2339,158 @@ def compare_regime_vs_standard(data_dir, symbols, start_date, end_date, timefram
     """
     print("\n=== Comparing Regime-Based vs. Standard Optimization ===")
     
-    # 1. Run standard optimization
-    print("\n--- Running Standard Optimization ---")
-    standard_results = run_walk_forward_optimization(
-        data_dir=data_dir,
-        symbols=symbols,
-        start_date=start_date,
-        end_date=end_date,
-        timeframe=timeframe
-    )
+    # Ensure symbols is a list
+    if isinstance(symbols, str):
+        symbols = [symbols]
     
-    # Add error handling
-    if standard_results is None:
-        print("Standard optimization failed. Please check data and parameters.")
-        return None
+    # Expand tilde in path if present
+    if data_dir.startswith('~'):
+        data_dir = os.path.expanduser(data_dir)
+    
+    try:
+        # Debug: Print some information about the data
+        print("\n--- Data Information ---")
+        for symbol in symbols:
+            file_path = os.path.join(data_dir, f"{symbol}_{timeframe}.csv")
+            if not os.path.exists(file_path):
+                print(f"WARNING: Data file not found: {file_path}")
+            else:
+                print(f"Data file found: {file_path}")
         
-    standard_params = standard_results['best_params']
-    
-    # 2. Run regime-based optimization
-    print("\n--- Running Regime-Based Optimization ---")
-    regime_results = run_regime_optimization(
-        data_dir=data_dir,
-        symbols=symbols,
-        start_date=start_date,
-        end_date=end_date,
-        timeframe=timeframe
-    )
-    
-    regime_params = regime_results['regime_parameters']
-    
-    # 3. Run backtest with standard parameters
-    print("\n--- Running Standard Backtest ---")
-    standard_backtest, _, _ = run_backtest(
-        data_dir=data_dir,
-        symbols=symbols,
-        start_date=start_date,
-        end_date=end_date,
-        timeframe=timeframe,
-        fast_window=standard_params['fast_window'],
-        slow_window=standard_params['slow_window'],
-        fixed_position_size=100
-    )
-    
-    # 4. Run backtest with regime-based parameters
-    print("\n--- Running Regime-Based Backtest ---")
-    regime_backtest, _, _ = run_regime_backtest(
-        data_dir=data_dir,
-        symbols=symbols,
-        start_date=start_date,
-        end_date=end_date,
-        timeframe=timeframe,
-        regime_params=regime_params
-    )
-    
-    # 5. Compare results
-    print("\n=== Performance Comparison ===")
-    print(f"                     Standard      Regime-Based")
-    print(f"Return:             {standard_backtest['return_pct']:>8.2f}%     {regime_backtest['return_pct']:>8.2f}%")
-    print(f"Annual Return:      {standard_backtest['annual_return']:>8.2f}%     {regime_backtest['annual_return']:>8.2f}%")
-    print(f"Max Drawdown:       {standard_backtest['max_drawdown']:>8.2f}%     {regime_backtest['max_drawdown']:>8.2f}%")
-    print(f"Sharpe Ratio:       {standard_backtest['sharpe_ratio']:>8.2f}      {regime_backtest['sharpe_ratio']:>8.2f}")
-    print(f"Trade Count:        {standard_backtest['trade_count']:>8d}      {regime_backtest['trade_count']:>8d}")
-    print(f"Signal Count:       {standard_backtest['signal_count']:>8d}      {regime_backtest['signal_count']:>8d}")
-    
-    # Calculate improvement
-    if standard_backtest['sharpe_ratio'] > 0:
-        sharpe_improvement = (regime_backtest['sharpe_ratio'] / standard_backtest['sharpe_ratio'] - 1) * 100
-        print(f"\nSharpe Ratio Improvement: {sharpe_improvement:.2f}%")
-    
-    return {
-        'standard': {
-            'params': standard_params,
-            'results': standard_backtest
-        },
-        'regime_based': {
-            'params': regime_params,
-            'results': regime_backtest
+        # 1. Skip optimization and use fixed parameters for standard strategy
+        print("\n--- Using Fixed Parameters for Standard Strategy ---")
+        standard_params = {'fast_window': 5, 'slow_window': 20}
+        print(f"Fixed parameters: {standard_params}")
+        
+        # 2. Run backtest with standard parameters
+        print("\n--- Running Standard Backtest ---")
+        # Store all the results in a tuple and unpack what we need
+        standard_results = run_backtest(
+            data_dir=data_dir,
+            symbols=symbols,
+            start_date=start_date,
+            end_date=end_date,
+            timeframe=timeframe,
+            fast_window=standard_params['fast_window'],
+            slow_window=standard_params['slow_window'],
+            fixed_position_size=100
+        )
+        
+        # Unpack appropriately based on the number of returned values
+        if len(standard_results) == 4:
+            standard_backtest, standard_tracker, standard_portfolio, standard_equity = standard_results
+        elif len(standard_results) == 3:
+            standard_backtest, standard_tracker, standard_portfolio = standard_results
+            standard_equity = None
+        else:
+            print(f"Unexpected number of values from run_backtest: {len(standard_results)}")
+            standard_backtest, standard_tracker, standard_portfolio, standard_equity = None, EventTracker(), None, None
+        
+        if standard_backtest is None:
+            print("Standard backtest failed. Using default results.")
+            standard_backtest = {
+                'return_pct': 0.0,
+                'annual_return': 0.0,
+                'max_drawdown': 0.0,
+                'sharpe_ratio': 0.0,
+                'trade_count': 0,
+                'signal_count': 0
+            }
+            standard_tracker = EventTracker()
+        
+        # Print detailed results from standard backtest
+        print("\n--- Standard Backtest Details ---")
+        print(f"Signals generated: {standard_tracker.event_counts.get(EventType.SIGNAL, 0)}")
+        print(f"Orders placed: {standard_tracker.event_counts.get(EventType.ORDER, 0)}")
+        print(f"Fills executed: {standard_tracker.event_counts.get(EventType.FILL, 0)}")
+        
+        # 3. Create simple regime parameters instead of optimizing
+        print("\n--- Using Fixed Parameters for Regime-Based Strategy ---")
+        # Create default regime parameters - using more aggressive parameters
+        regime_params = {
+            MarketRegime.UPTREND: {'fast_window': 3, 'slow_window': 15},
+            MarketRegime.DOWNTREND: {'fast_window': 8, 'slow_window': 25},
+            MarketRegime.SIDEWAYS: {'fast_window': 10, 'slow_window': 30},
+            MarketRegime.VOLATILE: {'fast_window': 5, 'slow_window': 25},
+            MarketRegime.UNKNOWN: {'fast_window': 5, 'slow_window': 20}
         }
-    }
+        print(f"Fixed regime parameters: {regime_params}")
+        
+        # 4. Run backtest with regime-based parameters
+        print("\n--- Running Regime-Based Backtest ---")
+        # Store all the results in a tuple and unpack what we need
+        regime_results = run_regime_backtest(
+            data_dir=data_dir,
+            symbols=symbols,
+            start_date=start_date,
+            end_date=end_date,
+            timeframe=timeframe,
+            regime_params=regime_params
+        )
+        
+        # Unpack appropriately based on the number of returned values
+        if len(regime_results) == 3:
+            regime_backtest, regime_tracker, regime_portfolio = regime_results
+            regime_equity = None
+        elif len(regime_results) == 4:
+            regime_backtest, regime_tracker, regime_portfolio, regime_equity = regime_results
+        else:
+            print(f"Unexpected number of values from run_regime_backtest: {len(regime_results)}")
+            regime_backtest, regime_tracker, regime_portfolio, regime_equity = None, EventTracker(), None, None
+        
+        if regime_backtest is None:
+            print("Regime-based backtest failed. Using default results.")
+            regime_backtest = {
+                'return_pct': 0.0,
+                'annual_return': 0.0,
+                'max_drawdown': 0.0,
+                'sharpe_ratio': 0.0,
+                'trade_count': 0,
+                'signal_count': 0
+            }
+            regime_tracker = EventTracker()
+        
+        # Print detailed results from regime backtest
+        print("\n--- Regime-Based Backtest Details ---")
+        print(f"Signals generated: {regime_tracker.event_counts.get(EventType.SIGNAL, 0)}")
+        print(f"Orders placed: {regime_tracker.event_counts.get(EventType.ORDER, 0)}")
+        print(f"Fills executed: {regime_tracker.event_counts.get(EventType.FILL, 0)}")
+        
+        # 5. Compare results
+        print("\n=== Performance Comparison ===")
+        print(f"                     Standard      Regime-Based")
+        print(f"Return:             {standard_backtest.get('return_pct', 0.0):>8.2f}%     {regime_backtest.get('return_pct', 0.0):>8.2f}%")
+        print(f"Annual Return:      {standard_backtest.get('annual_return', 0.0):>8.2f}%     {regime_backtest.get('annual_return', 0.0):>8.2f}%")
+        print(f"Max Drawdown:       {standard_backtest.get('max_drawdown', 0.0):>8.2f}%     {regime_backtest.get('max_drawdown', 0.0):>8.2f}%")
+        print(f"Sharpe Ratio:       {standard_backtest.get('sharpe_ratio', 0.0):>8.2f}      {regime_backtest.get('sharpe_ratio', 0.0):>8.2f}")
+        print(f"Trade Count:        {standard_backtest.get('trade_count', 0):>8d}      {regime_backtest.get('trade_count', 0):>8d}")
+        print(f"Signal Count:       {standard_backtest.get('signal_count', 0):>8d}      {regime_backtest.get('signal_count', 0):>8d}")
+        
+        # Calculate improvement if possible
+        std_sharpe = standard_backtest.get('sharpe_ratio', 0.0)
+        regime_sharpe = regime_backtest.get('sharpe_ratio', 0.0)
+        
+        if std_sharpe > 0 and regime_sharpe > 0:
+            sharpe_improvement = (regime_sharpe / std_sharpe - 1) * 100
+            print(f"\nSharpe Ratio Improvement: {sharpe_improvement:.2f}%")
+        
+        # Return comparison results
+        return {
+            'standard': {
+                'params': standard_params,
+                'results': standard_backtest
+            },
+            'regime_based': {
+                'params': regime_params,
+                'results': regime_backtest
+            }
+        }
+        
+    except Exception as e:
+        print(f"Error in comparison process: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 
 if __name__ == "__main__":
