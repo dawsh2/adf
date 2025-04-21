@@ -186,181 +186,13 @@ def create_synthetic_data(data_dir, symbol="SYNTH", days=10, bars_per_day=390):
     print(f"Date range: {df['timestamp'].min()} to {df['timestamp'].max()}")
     return df
 
-# class DummyStrategy:
-#     """
-#     Dummy strategy that generates signals based on price movements in synthetic data.
-#     Used for validation purposes of the event system.
-#     """
-    
-#     def __init__(self, name, symbols, fast_window=20, slow_window=50):
-#         """
-#         Initialize the dummy strategy.
-        
-#         Args:
-#             name: Strategy name
-#             symbols: List of symbols to trade
-#             fast_window: Short-term price window for trend detection
-#             slow_window: Long-term price window for trend detection
-#         """
-#         self.name = name
-#         self.event_bus = None
-#         self.symbols = symbols if isinstance(symbols, list) else [symbols]
-#         self.signals = []
-        
-#         # Windows for trend detection
-#         self.fast_window = fast_window
-#         self.slow_window = slow_window
-        
-#         # Store price history and last signal direction
-#         self.price_history = {symbol: [] for symbol in self.symbols}
-#         self.last_signal = {symbol: None for symbol in self.symbols}
-#         self.ma_values = {symbol: {'fast': None, 'slow': None} for symbol in self.symbols}
-        
-#         # Debug counter
-#         self.bar_count = {symbol: 0 for symbol in self.symbols}
-        
-#         # Initialization phase - don't generate signals until we have enough data
-#         self.initialized = {symbol: False for symbol in self.symbols}
-        
-#         print(f"Strategy initialized with fast_window={fast_window}, slow_window={slow_window}")
-    
-#     def set_event_bus(self, event_bus):
-#         """Set the event bus."""
-#         self.event_bus = event_bus
-#         return self
-    
-#     def _calculate_moving_averages(self, prices):
-#         """
-#         Calculate moving averages for trend detection.
-        
-#         Args:
-#             prices: List of closing prices
-            
-#         Returns:
-#             dict: Dictionary with fast and slow MA values
-#         """
-#         if len(prices) < self.slow_window:
-#             return {'fast': None, 'slow': None}
-            
-#         fast_ma = sum(prices[-self.fast_window:]) / self.fast_window
-#         slow_ma = sum(prices[-self.slow_window:]) / self.slow_window
-        
-#         return {'fast': fast_ma, 'slow': slow_ma}
-    
-#     def on_bar(self, event):
-#         """Process a bar event and generate signals based on price movements."""
-#         if not isinstance(event, BarEvent):
-#             return None
-            
-#         symbol = event.get_symbol()
-#         if symbol not in self.symbols:
-#             return None
-        
-#         # Update bar counter for debugging
-#         self.bar_count[symbol] += 1
-        
-#         # Store price data
-#         close_price = event.get_close()
-#         self.price_history[symbol].append(close_price)
-        
-#         # Keep history manageable
-#         max_history = self.slow_window + 10
-#         if len(self.price_history[symbol]) > max_history:
-#             self.price_history[symbol] = self.price_history[symbol][-max_history:]
-        
-#         # Check if we have enough data
-#         if len(self.price_history[symbol]) < self.slow_window:
-#             return None
-        
-#         # Calculate MAs
-#         current_mas = self._calculate_moving_averages(self.price_history[symbol])
-        
-#         # Mark as initialized when we have enough data
-#         if not self.initialized[symbol] and current_mas['fast'] is not None and current_mas['slow'] is not None:
-#             self.initialized[symbol] = True
-#             self.ma_values[symbol] = current_mas
-#             print(f"Strategy initialized for {symbol} at bar {self.bar_count[symbol]}")
-#             return None
-            
-#         # Get previous MA values
-#         prev_fast = self.ma_values[symbol]['fast']
-#         prev_slow = self.ma_values[symbol]['slow']
-        
-#         # Update MA values
-#         self.ma_values[symbol] = current_mas
-        
-#         # Skip if no previous values or not initialized
-#         if prev_fast is None or prev_slow is None or not self.initialized[symbol]:
-#             return None
-            
-#         # Log MA values periodically for debugging
-#         if self.bar_count[symbol] % 100 == 0:
-#             print(f"DEBUG: Bar {self.bar_count[symbol]} - Symbol: {symbol}, Fast MA: {current_mas['fast']:.2f}, Slow MA: {current_mas['slow']:.2f}")
-        
-#         # Generate signal on MA crossover
-#         signal = None
-#         current_fast = current_mas['fast']
-#         current_slow = current_mas['slow']
-        
-#         # Buy signal: fast MA crosses above slow MA
-#         if current_fast > current_slow and prev_fast <= prev_slow:
-#             signal = SignalEvent(
-#                 signal_value=SignalEvent.BUY,
-#                 price=close_price,
-#                 symbol=symbol,
-#                 rule_id=self.name,
-#                 confidence=1.0,
-#                 metadata={
-#                     'fast_ma': current_fast,
-#                     'slow_ma': current_slow
-#                 },
-#                 timestamp=event.get_timestamp()
-#             )
-#             self.last_signal[symbol] = SignalEvent.BUY
-#             print(f"Generated BUY signal for {symbol} at {close_price:.2f}, bar {self.bar_count[symbol]}")
-            
-#         # Sell signal: fast MA crosses below slow MA
-#         elif current_fast < current_slow and prev_fast >= prev_slow:
-#             signal = SignalEvent(
-#                 signal_value=SignalEvent.SELL,
-#                 price=close_price,
-#                 symbol=symbol,
-#                 rule_id=self.name,
-#                 confidence=1.0,
-#                 metadata={
-#                     'fast_ma': current_fast,
-#                     'slow_ma': current_slow
-#                 },
-#                 timestamp=event.get_timestamp()
-#             )
-#             self.last_signal[symbol] = SignalEvent.SELL
-#             print(f"Generated SELL signal for {symbol} at {close_price:.2f}, bar {self.bar_count[symbol]}")
-        
-#         # Emit signal if generated
-#         if signal:
-#             self.signals.append(signal)
-#             if self.event_bus:
-#                 self.event_bus.emit(signal)
-#             return signal
-                
-#         return None
-    
-#     def reset(self):
-#         """Reset the strategy state."""
-#         self.signals = []
-#         self.price_history = {symbol: [] for symbol in self.symbols}
-#         self.last_signal = {symbol: None for symbol in self.symbols}
-#         self.ma_values = {symbol: {'fast': None, 'slow': None} for symbol in self.symbols}
-#         self.bar_count = {symbol: 0 for symbol in self.symbols}
-#         self.initialized = {symbol: False for symbol in self.symbols}
-        
 class DummyStrategy:
     """
     Dummy strategy that generates signals based on price movements in synthetic data.
     Used for validation purposes of the event system.
     """
     
-    def __init__(self, name, symbols, fast_window=5, slow_window=20):
+    def __init__(self, name, symbols, fast_window=20, slow_window=50):
         """
         Initialize the dummy strategy.
         
@@ -382,44 +214,38 @@ class DummyStrategy:
         # Store price history and last signal direction
         self.price_history = {symbol: [] for symbol in self.symbols}
         self.last_signal = {symbol: None for symbol in self.symbols}
+        self.ma_values = {symbol: {'fast': None, 'slow': None} for symbol in self.symbols}
         
         # Debug counter
         self.bar_count = {symbol: 0 for symbol in self.symbols}
+        
+        # Initialization phase - don't generate signals until we have enough data
+        self.initialized = {symbol: False for symbol in self.symbols}
+        
+        print(f"Strategy initialized with fast_window={fast_window}, slow_window={slow_window}")
     
     def set_event_bus(self, event_bus):
         """Set the event bus."""
         self.event_bus = event_bus
         return self
     
-    def _calculate_trend(self, prices):
+    def _calculate_moving_averages(self, prices):
         """
-        Calculate trend based on price slope.
+        Calculate moving averages for trend detection.
         
         Args:
             prices: List of closing prices
             
         Returns:
-            int: 1 for uptrend, -1 for downtrend, 0 for no clear trend
+            dict: Dictionary with fast and slow MA values
         """
         if len(prices) < self.slow_window:
-            return 0  # Not enough data
+            return {'fast': None, 'slow': None}
             
-        # Calculate short-term and long-term average slopes
-        fast_prices = prices[-self.fast_window:]
-        fast_slope = (fast_prices[-1] - fast_prices[0]) / len(fast_prices)
+        fast_ma = sum(prices[-self.fast_window:]) / self.fast_window
+        slow_ma = sum(prices[-self.slow_window:]) / self.slow_window
         
-        slow_prices = prices[-self.slow_window:]
-        slow_slope = (slow_prices[-1] - slow_prices[0]) / len(slow_prices)
-        
-        # Determine trend based on slope relationship
-        trend_threshold = 0.01  # Minimum slope to consider a trend
-        
-        if fast_slope > trend_threshold and fast_slope > slow_slope:
-            return 1  # Uptrend
-        elif fast_slope < -trend_threshold and fast_slope < slow_slope:
-            return -1  # Downtrend
-        else:
-            return 0  # No clear trend
+        return {'fast': fast_ma, 'slow': slow_ma}
     
     def on_bar(self, event):
         """Process a bar event and generate signals based on price movements."""
@@ -438,50 +264,73 @@ class DummyStrategy:
         self.price_history[symbol].append(close_price)
         
         # Keep history manageable
-        max_history = max(self.fast_window, self.slow_window) + 10
+        max_history = self.slow_window + 10
         if len(self.price_history[symbol]) > max_history:
             self.price_history[symbol] = self.price_history[symbol][-max_history:]
         
         # Check if we have enough data
         if len(self.price_history[symbol]) < self.slow_window:
             return None
+        
+        # Calculate MAs
+        current_mas = self._calculate_moving_averages(self.price_history[symbol])
+        
+        # Mark as initialized when we have enough data
+        if not self.initialized[symbol] and current_mas['fast'] is not None and current_mas['slow'] is not None:
+            self.initialized[symbol] = True
+            self.ma_values[symbol] = current_mas
+            print(f"Strategy initialized for {symbol} at bar {self.bar_count[symbol]}")
+            return None
             
-        # Calculate current trend
-        current_trend = self._calculate_trend(self.price_history[symbol])
+        # Get previous MA values
+        prev_fast = self.ma_values[symbol]['fast']
+        prev_slow = self.ma_values[symbol]['slow']
         
-        # Log trend periodically for debugging
+        # Update MA values
+        self.ma_values[symbol] = current_mas
+        
+        # Skip if no previous values or not initialized
+        if prev_fast is None or prev_slow is None or not self.initialized[symbol]:
+            return None
+            
+        # Log MA values periodically for debugging
         if self.bar_count[symbol] % 100 == 0:
-            print(f"DEBUG: Bar {self.bar_count[symbol]} - Symbol: {symbol}, Trend: {current_trend}")
+            print(f"DEBUG: Bar {self.bar_count[symbol]} - Symbol: {symbol}, Fast MA: {current_mas['fast']:.2f}, Slow MA: {current_mas['slow']:.2f}")
         
-        # Generate signal on trend change
+        # Generate signal on MA crossover
         signal = None
+        current_fast = current_mas['fast']
+        current_slow = current_mas['slow']
         
-        # Only generate signal if trend has changed or no previous signal
-        last_sig = self.last_signal[symbol]
-        
-        if current_trend == 1 and (last_sig is None or last_sig != SignalEvent.BUY):
-            # Uptrend detected - generate buy signal
+        # Buy signal: fast MA crosses above slow MA
+        if current_fast > current_slow and prev_fast <= prev_slow:
             signal = SignalEvent(
                 signal_value=SignalEvent.BUY,
                 price=close_price,
                 symbol=symbol,
                 rule_id=self.name,
                 confidence=1.0,
-                metadata={'calculated_trend': current_trend},
+                metadata={
+                    'fast_ma': current_fast,
+                    'slow_ma': current_slow
+                },
                 timestamp=event.get_timestamp()
             )
             self.last_signal[symbol] = SignalEvent.BUY
             print(f"Generated BUY signal for {symbol} at {close_price:.2f}, bar {self.bar_count[symbol]}")
             
-        elif current_trend == -1 and (last_sig is None or last_sig != SignalEvent.SELL):
-            # Downtrend detected - generate sell signal
+        # Sell signal: fast MA crosses below slow MA
+        elif current_fast < current_slow and prev_fast >= prev_slow:
             signal = SignalEvent(
                 signal_value=SignalEvent.SELL,
                 price=close_price,
                 symbol=symbol,
                 rule_id=self.name,
                 confidence=1.0,
-                metadata={'calculated_trend': current_trend},
+                metadata={
+                    'fast_ma': current_fast,
+                    'slow_ma': current_slow
+                },
                 timestamp=event.get_timestamp()
             )
             self.last_signal[symbol] = SignalEvent.SELL
@@ -501,7 +350,168 @@ class DummyStrategy:
         self.signals = []
         self.price_history = {symbol: [] for symbol in self.symbols}
         self.last_signal = {symbol: None for symbol in self.symbols}
+        self.ma_values = {symbol: {'fast': None, 'slow': None} for symbol in self.symbols}
         self.bar_count = {symbol: 0 for symbol in self.symbols}
+        self.initialized = {symbol: False for symbol in self.symbols}
+        
+# class DummyStrategy:
+#     """
+#     Dummy strategy that generates signals based on price movements in synthetic data.
+#     Used for validation purposes of the event system.
+#     """
+    
+#     def __init__(self, name, symbols, fast_window=5, slow_window=20):
+#         """
+#         Initialize the dummy strategy.
+        
+#         Args:
+#             name: Strategy name
+#             symbols: List of symbols to trade
+#             fast_window: Short-term price window for trend detection
+#             slow_window: Long-term price window for trend detection
+#         """
+#         self.name = name
+#         self.event_bus = None
+#         self.symbols = symbols if isinstance(symbols, list) else [symbols]
+#         self.signals = []
+        
+#         # Windows for trend detection
+#         self.fast_window = fast_window
+#         self.slow_window = slow_window
+        
+#         # Store price history and last signal direction
+#         self.price_history = {symbol: [] for symbol in self.symbols}
+#         self.last_signal = {symbol: None for symbol in self.symbols}
+        
+#         # Debug counter
+#         self.bar_count = {symbol: 0 for symbol in self.symbols}
+    
+#     def set_event_bus(self, event_bus):
+#         """Set the event bus."""
+#         self.event_bus = event_bus
+#         return self
+    
+#     def _calculate_trend(self, prices):
+#         """
+#         Calculate trend based on price slope.
+        
+#         Args:
+#             prices: List of closing prices
+            
+#         Returns:
+#             int: 1 for uptrend, -1 for downtrend, 0 for no clear trend
+#         """
+#         if len(prices) < self.slow_window:
+#             return 0  # Not enough data
+            
+#         # Calculate short-term and long-term average slopes
+#         fast_prices = prices[-self.fast_window:]
+#         fast_slope = (fast_prices[-1] - fast_prices[0]) / len(fast_prices)
+        
+#         slow_prices = prices[-self.slow_window:]
+#         slow_slope = (slow_prices[-1] - slow_prices[0]) / len(slow_prices)
+        
+#         # Determine trend based on slope relationship
+#         trend_threshold = 0.01  # Minimum slope to consider a trend
+        
+#         if fast_slope > trend_threshold and fast_slope > slow_slope:
+#             return 1  # Uptrend
+#         elif fast_slope < -trend_threshold and fast_slope < slow_slope:
+#             return -1  # Downtrend
+#         else:
+#             return 0  # No clear trend
+
+#     def on_bar(self, event):
+#         """Process a bar event and generate signals based on price movements."""
+#         if not isinstance(event, BarEvent):
+#             return None
+
+#         symbol = event.get_symbol()
+#         if symbol not in self.symbols:
+#             return None
+
+#         # Update bar counter for debugging
+#         self.bar_count[symbol] += 1
+
+#         # Store price data
+#         close_price = event.get_close()
+#         self.price_history[symbol].append(close_price)
+
+#         # Keep history manageable
+#         max_history = max(self.fast_window, self.slow_window) + 10
+#         if len(self.price_history[symbol]) > max_history:
+#             self.price_history[symbol] = self.price_history[symbol][-max_history:]
+
+#         # Check if we have enough data
+#         if len(self.price_history[symbol]) < self.slow_window:
+#             return None
+
+#         # Calculate current trend
+#         current_trend = self._calculate_trend(self.price_history[symbol])
+
+#         # Log trend periodically for debugging
+#         if self.bar_count[symbol] % 100 == 0:
+#             print(f"DEBUG: Bar {self.bar_count[symbol]} - Symbol: {symbol}, Trend: {current_trend}")
+
+#         # Generate signal on trend change
+#         signal = None
+
+#         # Skip first detection - only generate signals on actual trend changes
+#         # This means we need to have a previous signal to compare against
+#         if self.last_signal[symbol] is None:
+#             # Just record the initial trend without generating a signal
+#             if current_trend == 1:
+#                 self.last_signal[symbol] = SignalEvent.BUY
+#             elif current_trend == -1:
+#                 self.last_signal[symbol] = SignalEvent.SELL
+#             return None
+
+#         # Only generate signal if trend has changed
+#         last_sig = self.last_signal[symbol]
+
+#         if current_trend == 1 and last_sig != SignalEvent.BUY:
+#             # Uptrend detected - generate buy signal
+#             signal = SignalEvent(
+#                 signal_value=SignalEvent.BUY,
+#                 price=close_price,
+#                 symbol=symbol,
+#                 rule_id=self.name,
+#                 confidence=1.0,
+#                 metadata={'calculated_trend': current_trend},
+#                 timestamp=event.get_timestamp()
+#             )
+#             self.last_signal[symbol] = SignalEvent.BUY
+#             print(f"Generated BUY signal for {symbol} at {close_price:.2f}, bar {self.bar_count[symbol]}")
+
+#         elif current_trend == -1 and last_sig != SignalEvent.SELL:
+#             # Downtrend detected - generate sell signal
+#             signal = SignalEvent(
+#                 signal_value=SignalEvent.SELL,
+#                 price=close_price,
+#                 symbol=symbol,
+#                 rule_id=self.name,
+#                 confidence=1.0,
+#                 metadata={'calculated_trend': current_trend},
+#                 timestamp=event.get_timestamp()
+#             )
+#             self.last_signal[symbol] = SignalEvent.SELL
+#             print(f"Generated SELL signal for {symbol} at {close_price:.2f}, bar {self.bar_count[symbol]}")
+
+#         # Emit signal if generated
+#         if signal:
+#             self.signals.append(signal)
+#             if self.event_bus:
+#                 self.event_bus.emit(signal)
+#             return signal
+            
+#         return None
+    
+#     def reset(self):
+#         """Reset the strategy state."""
+#         self.signals = []
+#         self.price_history = {symbol: [] for symbol in self.symbols}
+#         self.last_signal = {symbol: None for symbol in self.symbols}
+#         self.bar_count = {symbol: 0 for symbol in self.symbols}
         
 class EventTracker:
     """Utility to track events passing through the system."""

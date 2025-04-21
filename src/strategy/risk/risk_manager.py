@@ -131,23 +131,23 @@ class SimpleRiskManager(RiskManagerBase):
         """Set the event bus."""
         self.event_bus = event_bus
         return self
-    
+
     def on_signal(self, event):
         """Process a signal event and produce an order if appropriate."""
         if not isinstance(event, SignalEvent):
             return
-        
+
         # Extract signal details
         symbol = event.get_symbol()
         signal_value = event.get_signal_value()
         price = event.get_price()
-        
+
         # Get current position from the portfolio
         position = self.portfolio.get_position(symbol)
         current_quantity = position.quantity if position else 0
-        
-        print(f"Processing signal for {symbol}: {'BUY' if signal_value == SignalEvent.BUY else 'SELL'}, current position: {current_quantity}")
-        
+
+        print(f"POSITION CHECK: Before signal for {symbol}: {'BUY' if signal_value == SignalEvent.BUY else 'SELL'}, current position: {current_quantity}")
+
         # BUY signal processing
         if signal_value == SignalEvent.BUY:
             if current_quantity < 0:  # Currently short
@@ -160,9 +160,9 @@ class SimpleRiskManager(RiskManagerBase):
                     price=price,
                     timestamp=event.get_timestamp()
                 )
-                
+
                 self._emit_order(cover_order)
-                
+
                 # Then go long
                 buy_order = create_order_event(
                     symbol=symbol,
@@ -172,9 +172,9 @@ class SimpleRiskManager(RiskManagerBase):
                     price=price,
                     timestamp=event.get_timestamp()
                 )
-                
+
                 self._emit_order(buy_order)
-                
+
             elif current_quantity == 0:  # No position
                 # Create BUY order
                 order = create_order_event(
@@ -185,12 +185,13 @@ class SimpleRiskManager(RiskManagerBase):
                     price=price,
                     timestamp=event.get_timestamp()
                 )
-                
+
                 self._emit_order(order)
-                
-            # If already long, we could either do nothing or add to position
-            # For simplicity, we'll do nothing
-        
+
+            else:  # Already long, could increase position or do nothing
+                # For simplicity, we'll just maintain the current position
+                pass
+
         # SELL signal processing
         elif signal_value == SignalEvent.SELL:
             if current_quantity > 0:  # Currently long
@@ -203,9 +204,9 @@ class SimpleRiskManager(RiskManagerBase):
                     price=price,
                     timestamp=event.get_timestamp()
                 )
-                
+
                 self._emit_order(sell_order)
-                
+
                 # Then go short
                 short_order = create_order_event(
                     symbol=symbol,
@@ -215,9 +216,9 @@ class SimpleRiskManager(RiskManagerBase):
                     price=price,
                     timestamp=event.get_timestamp()
                 )
-                
+
                 self._emit_order(short_order)
-                
+
             elif current_quantity == 0:  # No position
                 # Create SELL order to go short
                 order = create_order_event(
@@ -228,24 +229,31 @@ class SimpleRiskManager(RiskManagerBase):
                     price=price,
                     timestamp=event.get_timestamp()
                 )
-                
+
                 self._emit_order(order)
-                
-            # If already short, we could either do nothing or add to position
-            # For simplicity, we'll do nothing
+
+            else:  # Already short, could increase position or do nothing
+                # For simplicity, we'll just maintain the current position
+                pass
+
+        # Add a position check after processing
+        updated_position = self.portfolio.get_position(symbol)
+        new_quantity = updated_position.quantity if updated_position else 0
+        print(f"POSITION CHECK: After signal processing, new position: {new_quantity}")
     
+
     def _emit_order(self, order):
         """Emit order event and track it."""
         if not order:
             return
-            
+
         # Add to order list
         self.orders.append(order)
-        
+
         # Emit on event bus
         if self.event_bus:
             print(f"Emitting order: {order.get_symbol()} {order.get_direction()} {order.get_quantity()} @ {order.get_price():.2f}")
-            self.event_bus.emit(order)
+            self.event_bus.emit(order)   
     
     def evaluate_trade(self, symbol, direction, quantity, price):
         """Evaluate if a trade complies with risk rules."""
