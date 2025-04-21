@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """
-Simple Backtest Script
+Simple Backtest Script (Modified)
 
 This script runs a complete backtest of a Moving Average Crossover strategy with
-debug logging to ensure the event and execution system is working correctly.
+a simplified risk management approach that allows only one position at a time.
 """
 import datetime
 import logging
@@ -26,6 +26,7 @@ from src.core.events.event_bus import EventBus
 from src.core.events.event_manager import EventManager
 from src.core.events.event_types import EventType, Event, SignalEvent, OrderEvent, FillEvent, BarEvent
 from src.core.events.event_emitters import BarEmitter
+from src.core.events.event_utils import create_fill_event, create_order_event
 
 # Import data components
 from src.data.sources.csv_handler import CSVDataSource
@@ -38,7 +39,7 @@ from src.execution.portfolio import PortfolioManager
 
 # Import risk components
 from src.strategy.risk.position_sizer import PositionSizer
-from src.strategy.risk.risk_manager import RiskManager
+from src.strategy.risk.risk_manager import SimpleRiskManager
 
 # Import strategy
 from src.models.components.base import StrategyBase
@@ -172,6 +173,136 @@ class MovingAverageCrossoverStrategy:
         self.signals = []
 
 
+class SimpleRiskManager:
+    """
+    Simplified risk manager that handles long and short positions.
+    Only allows one position at a time (either long or short).
+    """
+    
+    def __init__(self, portfolio, event_bus=None, fixed_size=100):
+        """Initialize the simplified risk manager."""
+        self.portfolio = portfolio
+        self.event_bus = event_bus
+        self.fixed_size = fixed_size
+        self.position_state = {symbol: 0 for symbol in ["SPY"]}  # 0=neutral, 1=long, -1=short
+    
+    def set_event_bus(self, event_bus):
+        """Set the event bus."""
+        self.event_bus = event_bus
+        return self
+    
+    def on_signal(self, event):
+        """Process a signal event and produce an order if appropriate."""
+        if not isinstance(event, SignalEvent):
+            return
+        
+        # Extract signal details
+        symbol = event.get_symbol()
+        signal_value = event.get_signal_value()
+        price = event.get_price()
+        
+        # Initialize position state if not exists
+        if symbol not in self.position_state:
+            self.position_state[symbol] = 0
+        
+        # Get current position state (0=neutral, 1=long, -1=short)
+        current_state = self.position_state[symbol]
+        
+        # BUY signal (signal_value = 1)
+        if signal_value == SignalEvent.BUY:
+            if current_state == 0:  # If neutral, go long
+                # Create BUY order
+                order = create_order_event(
+                    symbol=symbol,
+                    order_type="MARKET",
+                    direction="BUY",
+                    quantity=self.fixed_size,
+                    price=price,
+                    timestamp=event.get_timestamp()
+                )
+                self.position_state[symbol] = 1  # Mark as long
+                if self.event_bus:
+                    logger.info(f"Creating BUY order for {symbol}: {self.fixed_size} shares @ {price} (neutral → long)")
+                    self.event_bus.emit(order)
+                    
+            elif current_state == -1:  # If short, cover first then go long
+                # Close short position first
+                cover_order = create_order_event(
+                    symbol=symbol,
+                    order_type="MARKET",
+                    direction="BUY",
+                    quantity=self.fixed_size,
+                    price=price,
+                    timestamp=event.get_timestamp()
+                )
+                if self.event_bus:
+                    logger.info(f"Creating BUY order for {symbol}: {self.fixed_size} shares @ {price} (covering short)")
+                    self.event_bus.emit(cover_order)
+                
+                # Then go long
+                buy_order = create_order_event(
+                    symbol=symbol,
+                    order_type="MARKET",
+                    direction="BUY",
+                    quantity=self.fixed_size,
+                    price=price,
+                    timestamp=event.get_timestamp()
+                )
+                self.position_state[symbol] = 1  # Mark as long
+                if self.event_bus:
+                    logger.info(f"Creating BUY order for {symbol}: {self.fixed_size} shares @ {price} (going long)")
+                    self.event_bus.emit(buy_order)
+        
+        # SELL signal (signal_value = -1)
+        elif signal_value == SignalEvent.SELL:
+            if current_state == 1:  # If long, sell to close
+                # Create SELL order to close long
+                order = create_order_event(
+                    symbol=symbol,
+                    order_type="MARKET",
+                    direction="SELL",
+                    quantity=self.fixed_size,
+                    price=price,
+                    timestamp=event.get_timestamp()
+                )
+                if self.event_bus:
+                    logger.info(f"Creating SELL order for {symbol}: {self.fixed_size} shares @ {price} (closing long)")
+                    self.event_bus.emit(order)
+                
+                # Then go short
+                short_order = create_order_event(
+                    symbol=symbol,
+                    order_type="MARKET",
+                    direction="SELL",
+                    quantity=self.fixed_size,
+                    price=price,
+                    timestamp=event.get_timestamp()
+                )
+                self.position_state[symbol] = -1  # Mark as short
+                if self.event_bus:
+                    logger.info(f"Creating SELL order for {symbol}: {self.fixed_size} shares @ {price} (going short)")
+                    self.event_bus.emit(short_order)
+                    
+            elif current_state == 0:  # If neutral, go short
+                # Create SELL order to go short
+                order = create_order_event(
+                    symbol=symbol,
+                    order_type="MARKET",
+                    direction="SELL",
+                    quantity=self.fixed_size,
+                    price=price,
+                    timestamp=event.get_timestamp()
+                )
+                self.position_state[symbol] = -1  # Mark as short
+                if self.event_bus:
+                    logger.info(f"Creating SELL order for {symbol}: {self.fixed_size} shares @ {price} (neutral → short)")
+                    self.event_bus.emit(order)
+    
+    def reset(self):
+        """Reset the risk manager state."""
+        self.position_state = {symbol: 0 for symbol in self.position_state}
+
+
 class EventTracker:
     """Utility to track events passing through the system."""
     
@@ -214,7 +345,7 @@ class EventTracker:
 
 
 def run_backtest(data_dir, symbols=None, start_date=None, end_date=None,
-               timeframe='1m', fast_window=5, slow_window=15):
+               timeframe='1m', fast_window=5, slow_window=15, fixed_position_size=100):
     """
     Run a backtest with the given parameters.
     
@@ -226,6 +357,7 @@ def run_backtest(data_dir, symbols=None, start_date=None, end_date=None,
         timeframe: Data timeframe
         fast_window: Fast moving average window
         slow_window: Slow moving average window
+        fixed_position_size: Fixed position size for each trade
         
     Returns:
         tuple: (results, event_tracker, portfolio)
@@ -306,14 +438,14 @@ def run_backtest(data_dir, symbols=None, start_date=None, end_date=None,
     
     # --- Setup Data Components ---
     
-    # Create data source with correct column mapping and timestamp handling
+    # Create data source
     data_source = CSVDataSource(
         data_dir=data_dir,
         filename_pattern='{symbol}_{timeframe}.csv',
-        date_column='timestamp',  # Your file has 'timestamp', not 'date'
+        date_column='timestamp',
         date_format=None,  # Let pandas auto-detect the format
         column_map={
-            'open': ['Open'],  # Match the exact column names in your file
+            'open': ['Open'],
             'high': ['High'],
             'low': ['Low'],
             'close': ['Close'],
@@ -328,36 +460,28 @@ def run_backtest(data_dir, symbols=None, start_date=None, end_date=None,
     # Create data handler
     data_handler = HistoricalDataHandler(data_source, bar_emitter)
     
-    # --- Setup Portfolio and Risk Components ---
+    # --- Setup Portfolio ---
     
     # Create portfolio with initial capital
     initial_capital = 100000.0
     portfolio = PortfolioManager(initial_cash=initial_capital, event_bus=event_bus)
     
-    # Create position sizer
-    position_sizer = PositionSizer(method='fixed', params={'shares': 100})
+    # --- Setup Risk Manager ---
     
-    # Create risk manager
-    risk_manager = RiskManager(
+    # Create simplified risk manager that only allows one position at a time
+    risk_manager = SimpleRiskManager(
         portfolio=portfolio,
-        position_sizer=position_sizer,
-        risk_limits={
-            'max_position_size': 1000,
-            'max_exposure': 0.2,
-            'min_trade_size': 10
-        },
-        event_bus=event_bus
+        event_bus=event_bus,
+        fixed_size=fixed_position_size
     )
     
     # --- Setup Execution Components ---
     
-    # Create broker and update market data
-    broker = SimulatedBroker()
-    execution_engine = ExecutionEngine(broker_interface=broker, event_bus=event_bus)
+    # Create broker
+    broker = SimulatedBroker(fill_emitter=event_bus)  # Direct connection to event bus
     
-    # Initial market price setup
-    for symbol in symbols:
-        broker.update_market_data(symbol, {"price": 100.0})  # Default price
+    # Create execution engine
+    execution_engine = ExecutionEngine(broker_interface=broker, event_bus=event_bus)
     
     # --- Setup Strategy ---
     
@@ -370,9 +494,13 @@ def run_backtest(data_dir, symbols=None, start_date=None, end_date=None,
     )
     strategy.set_event_bus(event_bus)
     
+    # Initial market price setup
+    for symbol in symbols:
+        broker.update_market_data(symbol, {"price": 100.0})  # Default price
+    
     # --- Register Components with Event Manager ---
     
-    # Make explicit event connections
+    # Register all components
     event_manager.register_component('strategy', strategy, [EventType.BAR])
     event_manager.register_component('risk', risk_manager, [EventType.SIGNAL])
     event_manager.register_component('execution', execution_engine, [EventType.ORDER])
@@ -387,6 +515,7 @@ def run_backtest(data_dir, symbols=None, start_date=None, end_date=None,
     # Process bars for each symbol
     equity_curve = []
     
+    # Go through data chronologically
     for symbol in symbols:
         bar_count = 0
         
@@ -408,9 +537,10 @@ def run_backtest(data_dir, symbols=None, start_date=None, end_date=None,
             bar_count += 1
             
             if bar_count % 100 == 0:
-                logger.info(f"Processed {bar_count} bars for {symbol}")
+                logger.info(f"Processed {bar_count} bars for {symbol}, Portfolio equity: ${portfolio.get_equity():,.2f}")
         
         logger.info(f"Completed processing {bar_count} bars for {symbol}")
+        logger.info(f"Final Portfolio Cash: ${portfolio.cash:,.2f}")
     
     # --- Calculate Results ---
     
@@ -450,14 +580,16 @@ def run_backtest(data_dir, symbols=None, start_date=None, end_date=None,
     for event_type, count in tracker.get_summary().items():
         print(f"{event_type}: {count}")
     
-    # Check for issues in event flow
-    if results['signal_count'] > 0 and results['order_count'] == 0:
-        print("\nWARNING: Signals were generated but no orders were created!")
-        print("This suggests an issue with the risk manager or signal-to-order conversion.")
+    # Report on portfolio positions
+    print("\n=== Portfolio Positions ===")
+    positions = portfolio.get_all_positions()
+    if positions:
+        for symbol, position in positions.items():
+            print(f"{symbol}: {position.quantity} shares, Cost basis: ${position.cost_basis:.2f}")
+    else:
+        print("No positions in portfolio")
     
-    if results['order_count'] > 0 and results['trade_count'] == 0:
-        print("\nWARNING: Orders were created but no trades were executed!")
-        print("This suggests an issue with the execution engine or broker.")
+
     
     return results, tracker, portfolio
 
@@ -470,37 +602,13 @@ if __name__ == "__main__":
     print(f"Using data directory: {DATA_DIR}")
     
     # Use a date range that's within your data
-    # Your data appears to start on 2024-03-26
     results, tracker, portfolio = run_backtest(
         data_dir=DATA_DIR,
         symbols=["SPY"],
-        start_date="2024-03-26",  # Changed to match your data
-        end_date="2024-04-10",    # A reasonable end date within your data range
+        start_date="2024-03-26",  # Start date
+        end_date="2024-04-10",    # End date
         timeframe="1m",
         fast_window=10,
-        slow_window=30
+        slow_window=30,
+        fixed_position_size=100   # Fixed position size
     )
-    
-    # Plot equity curve if enough data
-    if results and len(tracker.events[EventType.FILL]) > 0:
-        # Create simple equity curve plot
-        equity_history = []
-        for fill in tracker.events[EventType.FILL]:
-            equity_history.append({
-                'timestamp': fill.get_timestamp(),
-                'equity': portfolio.get_equity()
-            })
-        
-        if equity_history:
-            equity_df = pd.DataFrame(equity_history)
-            equity_df.set_index('timestamp', inplace=True)
-            
-            plt.figure(figsize=(12, 6))
-            plt.plot(equity_df.index, equity_df['equity'])
-            plt.title('Portfolio Equity Curve')
-            plt.xlabel('Date')
-            plt.ylabel('Equity ($)')
-            plt.grid(True)
-            plt.tight_layout()
-            plt.savefig('equity_curve.png')
-            plt.close()

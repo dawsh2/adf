@@ -46,19 +46,29 @@ class PortfolioManager:
         
         # Update timestamp
         self.last_update_time = event.get_timestamp() or datetime.datetime.now()
-    
+
     def _update_position(self, symbol, direction, quantity, price):
         """Update or create position based on fill."""
         # Create position if it doesn't exist
         if symbol not in self.positions:
             self.positions[symbol] = Position(symbol)
-        
+
         # Update position quantity and cost basis
         position = self.positions[symbol]
+
+        # For buys, add to position (positive quantity)
+        # For sells, subtract from position (potentially creating negative quantity)
         if direction == 'BUY':
             position.add_quantity(quantity, price)
         elif direction == 'SELL':
-            position.reduce_quantity(quantity, price)
+            # If position doesn't exist or is zero, this will create a short position
+            if position.quantity == 0:
+                position.quantity = -quantity
+                position.cost_basis = price
+            else:
+                position.reduce_quantity(quantity, price)        
+    
+ 
     
     def _update_cash(self, direction, quantity, price, commission):
         """Update cash balance based on fill."""
