@@ -132,6 +132,7 @@ class SimpleRiskManager(RiskManagerBase):
         self.event_bus = event_bus
         return self
 
+
     def on_signal(self, event):
         """Process a signal event and produce an order if appropriate."""
         if not isinstance(event, SignalEvent):
@@ -188,10 +189,6 @@ class SimpleRiskManager(RiskManagerBase):
 
                 self._emit_order(order)
 
-            else:  # Already long, could increase position or do nothing
-                # For simplicity, we'll just maintain the current position
-                pass
-
         # SELL signal processing
         elif signal_value == SignalEvent.SELL:
             if current_quantity > 0:  # Currently long
@@ -232,15 +229,10 @@ class SimpleRiskManager(RiskManagerBase):
 
                 self._emit_order(order)
 
-            else:  # Already short, could increase position or do nothing
-                # For simplicity, we'll just maintain the current position
-                pass
-
         # Add a position check after processing
         updated_position = self.portfolio.get_position(symbol)
         new_quantity = updated_position.quantity if updated_position else 0
         print(f"POSITION CHECK: After signal processing, new position: {new_quantity}")
-    
 
     def _emit_order(self, order):
         """Emit order event and track it."""
