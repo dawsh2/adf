@@ -1,6 +1,8 @@
+from .mixins import OptimizableMixin
 
 
-# Component base with component_type as class attribute
+
+
 class ComponentBase:
     component_type = "components"
     
@@ -8,8 +10,7 @@ class ComponentBase:
         self.name = name
         self.config = config
         self.container = container
-        self.event_bus = None  # Initialize to None
-        self.emitter = None    # Initialize to None
+        self.event_bus = None
         
         # Load parameters
         self.params = self._load_parameters()
@@ -20,112 +21,130 @@ class ComponentBase:
         self.event_bus = event_bus
         return self  # For method chaining
         
-    def set_emitter(self, emitter):
-        """Set the emitter for this component."""
-        self.emitter = emitter
-        return self  # For method chaining
+    def _load_parameters(self):
+        """Load parameters from configuration."""
+        if self.config and hasattr(self.config, 'get_section'):
+            section = self.config.get_section(self.component_type)
+            # Try to get component-specific config
+            if hasattr(section, 'get_section'):
+                component_section = section.get_section(self.name)
+                return component_section.as_dict()
+        
+        # Return default parameters if no config available
+        return self.default_params()
+    
+    @classmethod
+    def default_params(cls):
+        """Get default parameters for this component."""
+        return {}
+        
+    def _validate_params(self):
+        """Validate parameters."""
+        # Default implementation does nothing
+        pass
+        
+    def reset(self):
+        """Reset component state."""
+        # Default implementation does nothing
+        pass    
 
 
-# Indicators with component_type as class attribute
-class IndicatorBase(ComponentBase):
+# src/models/components/base.py
+
+class IndicatorBase(ComponentBase, OptimizableMixin):
+    """Base class for technical indicators."""
+    
     component_type = "indicators"
     
-    def __init__(self, name, config=None, container=None):
-        super().__init__(name, config, container)
+    def __init__(self, name, **kwargs):
+        super().__init__(name, **kwargs)
         self.values = {}  # symbol -> indicator values
-
-class FeatureBase(ComponentBase):
-    component_type = "features"
-    
-    def __init__(self, name, config=None, container=None, indicators=None):
-        """
-        Initialize the feature.
-        
-        Args:
-            name: Feature name
-            config: Configuration object
-            container: DI container
-            indicators: Dictionary of indicators to use (injected)
-        """
-        super().__init__(name, config, container)
-        self.values = {}  # symbol -> feature value
-        self.indicators = indicators or {}
     
     def calculate(self, data):
-        """
-        Calculate the feature value from data.
-        
-        Args:
-            data: Dictionary or DataFrame with price and indicator data
-            
-        Returns:
-            Feature value(s)
-        """
+        """Calculate indicator value from data."""
         raise NotImplementedError("Subclasses must implement calculate()")
     
-    def on_bar(self, event):
-        """Process a bar event to update feature values."""
-        # Default implementation - subclasses may override
-        pass
+    def get_value(self, symbol):
+        """Get current indicator value for a symbol."""
+        return self.values.get(symbol)
+    
+    # Additional methods for OptimizableMixin
+    def validate_parameters(self, params):
+        """Validate indicator parameters."""
+        # Default implementation accepts all parameters
+        return True    
 
+# src/models/components/base.py
 
-class RuleBase(ComponentBase):
+class RuleBase(ComponentBase, OptimizableMixin):
+    """Base class for trading rules."""
+    
     component_type = "rules"
     
-    def __init__(self, name, config=None, container=None, signal_emitter=None):
-        """
-        Initialize the rule.
-        
-        Args:
-            name: Rule name
-            config: Configuration object
-            container: DI container
-            signal_emitter: Signal emitter for generating signals (injected)
-        """
-        super().__init__(name, config, container)
-        self.signal_emitter = signal_emitter
+    def __init__(self, name, **kwargs):
+        super().__init__(name, **kwargs)
         self.state = {}  # For storing rule state
     
     def on_bar(self, event):
-        """
-        Process a bar event to generate signals.
-        
-        Args:
-            event: BarEvent to process
-        """
+        """Process a bar event to generate signals."""
         raise NotImplementedError("Subclasses must implement on_bar()")
     
-    def reset(self):
-        """Reset the rule state."""
-        self.state = {}    
-        
+    # Additional methods for OptimizableMixin
+    def validate_parameters(self, params):
+        """Validate rule parameters."""
+        # Default implementation accepts all parameters
+        return True    
 
+# src/models/components/base.py
 
-class StrategyBase(ComponentBase):
+class StrategyBase(ComponentBase, OptimizableMixin, FilterableMixin):
+    """Base class for all trading strategies."""
+    
     component_type = "strategies"
     
-    def __init__(self, name, config=None, container=None, signal_emitter=None, order_emitter=None):
-        super().__init__(name, config, container)
-        self.signal_emitter = signal_emitter
-        self.order_emitter = order_emitter
+    def __init__(self, name, symbols, **kwargs):
+        super().__init__(name, **kwargs)
+        
+        # Convert single symbol to list
+        self.symbols = symbols if isinstance(symbols, list) else [symbols]
         
         # Component collections
         self.indicators = {}
         self.features = {}
         self.rules = {}
         
-        # Track the symbols this strategy is monitoring
-        self.symbols = set()
-        
         # Strategy state
         self.state = {}
+        
+        # Filter state
+        self.filter_results = {}
         
         # Create components based on configuration
         self._setup_components()
     
-    # Event handlers
-    def on_bar(self, event):
+    def _setup_components(self):
+        """Setup strategy components."""
+        # Implementation depends on specific strategy
         pass
+    
+    def on_bar(self, event):
+        """Process a bar event."""
+        # Check if filtered
+        symbol = event.get_symbol()
         
-    def on_signal(self, event):
-        pass        
+        # Skip if filtered out
+        if hasattr(self, 'filter_results') and symbol in self.filter_results:
+            latest_result = self.filter_results[symbol].get('latest')
+            if latest_result and not latest_result.passed:
+                return None
+        
+        # Regular strategy logic
+        pass
+    
+    # Additional methods for OptimizableMixin
+    def validate_parameters(self, params):
+        """Validate strategy parameters."""
+        # Example validation logic
+        if 'fast_window' in params and 'slow_window' in params:
+            return params['fast_window'] < params['slow_window']
+        return True        

@@ -18,6 +18,10 @@ class EventType(Enum):
     ERROR = auto()          # Error events
 
 
+    OPTIMIZATION = auto()   # Optimization events
+    FILTER = auto()         # Filter state events
+    REGIME = auto()         # Market regime events    
+
 class Event:
     """Base class for all events in the system."""
     
@@ -273,3 +277,71 @@ class ErrorEvent(Event):
         
     def get_exception(self):
         return self.data['exception']
+
+
+# Updates to src/core/events/event_types.py
+class OptimizationEvent(Event):
+    """Optimization result event."""
+    
+    def __init__(self, strategy, parameters, metrics, timestamp=None):
+        data = {
+            'strategy': strategy,
+            'parameters': parameters,
+            'metrics': metrics
+        }
+        super().__init__(EventType.OPTIMIZATION, data, timestamp)
+    
+    def get_strategy(self):
+        return self.data['strategy']
+        
+    def get_parameters(self):
+        return self.data['parameters']
+        
+    def get_metrics(self):
+        return self.data['metrics']
+
+
+class FilterEvent(Event):
+    """Filter state change event."""
+    
+    def __init__(self, filter_name, symbol, state, reason=None, timestamp=None):
+        data = {
+            'filter_name': filter_name,
+            'symbol': symbol,
+            'state': state,  # True/False for active/inactive
+            'reason': reason
+        }
+        super().__init__(EventType.FILTER, data, timestamp)
+    
+    def get_filter_name(self):
+        return self.data['filter_name']
+        
+    def get_symbol(self):
+        return self.data['symbol']
+        
+    def get_state(self):
+        return self.data['state']
+        
+    def get_reason(self):
+        return self.data['reason']
+
+
+class RegimeEvent(Event):
+    """Market regime change event."""
+    
+    def __init__(self, symbol, regime, confidence=1.0, timestamp=None):
+        data = {
+            'symbol': symbol,
+            'regime': regime,
+            'confidence': confidence
+        }
+        super().__init__(EventType.REGIME, data, timestamp)
+    
+    def get_symbol(self):
+        return self.data['symbol']
+        
+    def get_regime(self):
+        return self.data['regime']
+        
+    def get_confidence(self):
+        return self.data['confidence']    
