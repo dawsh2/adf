@@ -4,6 +4,9 @@ from typing import Dict, Any, Optional
 from src.core.events.event_types import SignalEvent, OrderEvent, EventType
 from src.core.events.event_utils import create_order_event
 
+import logging
+logger = logging.getLogger(__name__)
+
 class RiskManagerBase(ABC):
     """Abstract base class for risk managers."""
     
@@ -34,7 +37,9 @@ class RiskManager(RiskManagerBase):
         """Set the event bus."""
         self.event_bus = event_bus
         return self
-    
+
+
+
     def on_signal(self, signal_event):
         """Process a signal event and produce an order if appropriate."""
         if not isinstance(signal_event, SignalEvent):
@@ -125,6 +130,7 @@ class SimpleRiskManager(RiskManagerBase):
         self.portfolio = portfolio
         self.event_bus = event_bus
         self.fixed_size = fixed_size
+        self.position_state = {}  # symbol -> position state (0=neutral, 1=long, -1=short)
         self.orders = []  # For tracking generated orders
     
     def set_event_bus(self, event_bus):
@@ -132,91 +138,109 @@ class SimpleRiskManager(RiskManagerBase):
         self.event_bus = event_bus
         return self
 
+    def evaluate_trade(self, symbol, direction, quantity, price):
+        """
+        Evaluate if a trade complies with risk rules.
+        
+        Args:
+            symbol: Symbol to trade
+            direction: Trade direction ('BUY' or 'SELL')
+            quantity: Trade quantity
+            price: Trade price
+            
+        Returns:
+            bool: True if trade is allowed, False otherwise
+        """
+        # In this simplified implementation, always allow trades
+        # You could add more sophisticated risk checks here
+        return True
 
     def on_signal(self, event):
-        """Process a signal event and produce an order if appropriate."""
+        """
+        Process a signal event and produce an order if appropriate.
+        Properly tracks position state and ensures proper order sequence.
+        
+        Args:
+            event: Signal event with trading signal
+        """
         if not isinstance(event, SignalEvent):
             return
-
+        
         # Extract signal details
         symbol = event.get_symbol()
         signal_value = event.get_signal_value()
         price = event.get_price()
-
-        # Get current position from the portfolio
-        position = self.portfolio.get_position(symbol)
-        current_quantity = position.quantity if position else 0
-
-        print(f"POSITION CHECK: Before signal for {symbol}: {'BUY' if signal_value == SignalEvent.BUY else 'SELL'}, current position: {current_quantity}")
-
-        # BUY signal processing
+        timestamp = event.get_timestamp()
+        
+        # Initialize position state if not exists
+        if symbol not in self.position_state:
+            self.position_state[symbol] = 0
+        
+        # Get current position state (0=neutral, 1=long, -1=short)
+        current_state = self.position_state[symbol]
+        
+        # Log current state and signal for debugging
+        logger.debug(f"Processing signal for {symbol}: Current position: {current_state}, " 
+                    f"Signal: {'BUY' if signal_value == SignalEvent.BUY else 'SELL'}")
+        
+        # CASE 1: BUY signal
         if signal_value == SignalEvent.BUY:
-            if current_quantity < 0:  # Currently short
-                # Close short position first
-                cover_order = create_order_event(
-                    symbol=symbol,
-                    order_type="MARKET",
-                    direction="BUY",
-                    quantity=abs(current_quantity),  # Cover exact short amount
-                    price=price,
-                    timestamp=event.get_timestamp()
-                )
-
-                self._emit_order(cover_order)
-
-                # Then go long
-                buy_order = create_order_event(
-                    symbol=symbol,
-                    order_type="MARKET",
-                    direction="BUY",
-                    quantity=self.fixed_size,
-                    price=price,
-                    timestamp=event.get_timestamp()
-                )
-
-                self._emit_order(buy_order)
-
-            elif current_quantity == 0:  # No position
-                # Create BUY order
+            # Case 1A: Currently no position
+            if current_state == 0:
+                # Create BUY order for new long position
                 order = create_order_event(
                     symbol=symbol,
                     order_type="MARKET",
                     direction="BUY",
                     quantity=self.fixed_size,
                     price=price,
-                    timestamp=event.get_timestamp()
+                    timestamp=timestamp
                 )
-
-                self._emit_order(order)
-
-        # SELL signal processing
-        elif signal_value == SignalEvent.SELL:
-            if current_quantity > 0:  # Currently long
-                # Close long position first
-                sell_order = create_order_event(
+                # Only update state AFTER order is successfully emitted
+                if self._emit_order(order):
+                    self.position_state[symbol] = 1  # Mark as long
+                    logger.info(f"Opening LONG position for {symbol}: {self.fixed_size} @ {price:.2f}")
+                    
+            # Case 1B: Currently short - close short position only
+            elif current_state == -1:
+                # Close short position (buy to cover)
+                order = create_order_event(
                     symbol=symbol,
                     order_type="MARKET",
-                    direction="SELL",
-                    quantity=current_quantity,  # Sell exact long amount
+                    direction="BUY",  # Buy to cover short
+                    quantity=self.fixed_size,
                     price=price,
-                    timestamp=event.get_timestamp()
+                    timestamp=timestamp
                 )
-
-                self._emit_order(sell_order)
-
-                # Then go short
-                short_order = create_order_event(
+                # Only update state AFTER order is successfully emitted
+                if self._emit_order(order):
+                    self.position_state[symbol] = 0  # Mark as neutral
+                    logger.info(f"Closing SHORT position for {symbol}: {self.fixed_size} @ {price:.2f}")
+            
+            # Case 1C: Already long - do nothing
+            else:  # current_state == 1
+                logger.info(f"Ignoring BUY signal for {symbol}: already in LONG position")
+        
+        # CASE 2: SELL signal
+        elif signal_value == SignalEvent.SELL:
+            # Case 2A: Currently long - close long position only
+            if current_state == 1:
+                # Create SELL order to close long
+                order = create_order_event(
                     symbol=symbol,
                     order_type="MARKET",
                     direction="SELL",
                     quantity=self.fixed_size,
                     price=price,
-                    timestamp=event.get_timestamp()
+                    timestamp=timestamp
                 )
-
-                self._emit_order(short_order)
-
-            elif current_quantity == 0:  # No position
+                # Only update state AFTER order is successfully emitted
+                if self._emit_order(order):
+                    self.position_state[symbol] = 0  # Mark as neutral
+                    logger.info(f"Closing LONG position for {symbol}: {self.fixed_size} @ {price:.2f}")
+                    
+            # Case 2B: Currently no position - open short position
+            elif current_state == 0:
                 # Create SELL order to go short
                 order = create_order_event(
                     symbol=symbol,
@@ -224,35 +248,47 @@ class SimpleRiskManager(RiskManagerBase):
                     direction="SELL",
                     quantity=self.fixed_size,
                     price=price,
-                    timestamp=event.get_timestamp()
+                    timestamp=timestamp
                 )
-
-                self._emit_order(order)
-
-        # Add a position check after processing
-        updated_position = self.portfolio.get_position(symbol)
-        new_quantity = updated_position.quantity if updated_position else 0
-        print(f"POSITION CHECK: After signal processing, new position: {new_quantity}")
+                # Only update state AFTER order is successfully emitted
+                if self._emit_order(order):
+                    self.position_state[symbol] = -1  # Mark as short
+                    logger.info(f"Opening SHORT position for {symbol}: {self.fixed_size} @ {price:.2f}")
+            
+            # Case 2C: Already short - do nothing
+            else:  # current_state == -1
+                logger.info(f"Ignoring SELL signal for {symbol}: already in SHORT position")
+        
+        # After signal processing, double-check position state for consistency
+        updated_state = self.position_state[symbol]
+        if updated_state != current_state:
+            logger.info(f"Position state changed for {symbol}: {current_state} -> {updated_state}")
 
     def _emit_order(self, order):
-        """Emit order event and track it."""
+        """
+        Emit order event and track it.
+        Returns success status.
+        """
         if not order:
-            return
+            return False
 
         # Add to order list
         self.orders.append(order)
 
         # Emit on event bus
         if self.event_bus:
-            print(f"Emitting order: {order.get_symbol()} {order.get_direction()} {order.get_quantity()} @ {order.get_price():.2f}")
-            self.event_bus.emit(order)   
-    
-    def evaluate_trade(self, symbol, direction, quantity, price):
-        """Evaluate if a trade complies with risk rules."""
-        # Always allow trades in this simplified manager
-        return True
-    
+            try:
+                self.event_bus.emit(order)
+                logger.info(f"Order emitted: {order.get_symbol()} {order.get_direction()} "
+                          f"{order.get_quantity()} @ {order.get_price():.2f}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to emit order: {e}")
+                return False
+        return False
+        
     def reset(self):
         """Reset the risk manager state."""
+        self.position_state = {}
         self.orders = []
     
