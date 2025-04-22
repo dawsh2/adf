@@ -30,6 +30,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 def generate_sample_data(days=252, seed=42):
     """
     Generate sample price data with different regimes for testing.
@@ -60,6 +61,15 @@ def generate_sample_data(days=252, seed=42):
     prices = []
     true_regimes = []
     current_price = base_price
+    
+    # Calculate total length from regimes to ensure we match requested days
+    total_regime_days = sum(length for _, length in regimes)
+    
+    # Adjust the last regime length if necessary to match requested days
+    if total_regime_days != days:
+        regimes = list(regimes)  # Convert to mutable list
+        last_regime, last_length = regimes[-1]
+        regimes[-1] = (last_regime, last_length + (days - total_regime_days))
     
     for regime, length in regimes:
         if regime == 'uptrend':
@@ -96,6 +106,10 @@ def generate_sample_data(days=252, seed=42):
                 current_price += noise
                 prices.append(current_price)
                 true_regimes.append(MarketRegime.VOLATILE.value)
+    
+    # Double-check lengths to ensure they match
+    assert len(prices) == days, f"Generated {len(prices)} prices but expected {days}"
+    assert len(true_regimes) == days, f"Generated {len(true_regimes)} regime labels but expected {days}"
     
     # Create DataFrame
     df = pd.DataFrame({

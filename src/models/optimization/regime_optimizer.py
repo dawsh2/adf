@@ -478,6 +478,19 @@ class RegimeSpecificOptimizer:
         Returns:
             str: Text report
         """
+        # [Report generation code omitted for brevity]
+
+    def generate_report(self, data_handler, symbol):
+        """
+        Generate a comprehensive report of optimization results.
+        
+        Args:
+            data_handler: Data handler with loaded data
+            symbol: Symbol being analyzed
+            
+        Returns:
+            str: Text report
+        """
         if not self.results:
             return "No optimization results available."
             

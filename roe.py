@@ -41,6 +41,8 @@ from src.models.filters.regime.regime_strategy import RegimeAwareStrategy
 # If you don't, you'll need to create or import a different strategy
 from src.strategy.strategies.ma_crossover import MovingAverageCrossoverStrategy
 
+from src.models.optimization.datetime_utils import make_timestamps_compatible
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -134,130 +136,130 @@ def detect_market_regimes(data_handler, symbol, detector_preset='advanced_sensit
     return detector
 
 
-def visualize_regimes(data_handler, symbol, detector):
-    """
-    Visualize price data with regime annotations.
+# def visualize_regimes(data_handler, symbol, detector):
+#     """
+#     Visualize price data with regime annotations.
     
-    Args:
-        data_handler: Data handler with loaded data
-        symbol: Symbol to visualize
-        detector: Regime detector with regime history
-    """
-    # Reset data handler
-    data_handler.reset()
+#     Args:
+#         data_handler: Data handler with loaded data
+#         symbol: Symbol to visualize
+#         detector: Regime detector with regime history
+#     """
+#     # Reset data handler
+#     data_handler.reset()
     
-    # Extract price data and timestamps
-    timestamps = []
-    prices = []
-    regimes = []
+#     # Extract price data and timestamps
+#     timestamps = []
+#     prices = []
+#     regimes = []
     
-    while True:
-        bar = data_handler.get_next_bar(symbol)
-        if bar is None:
-            break
+#     while True:
+#         bar = data_handler.get_next_bar(symbol)
+#         if bar is None:
+#             break
             
-        # Get timestamp and price
-        timestamp = bar.get_timestamp()
-        close_price = bar.get_close()
+#         # Get timestamp and price
+#         timestamp = bar.get_timestamp()
+#         close_price = bar.get_close()
         
-        # Get regime at this timestamp
-        regime = detector.get_regime_at(symbol, timestamp)
+#         # Get regime at this timestamp
+#         regime = detector.get_regime_at(symbol, timestamp)
         
-        # Store data
-        timestamps.append(timestamp)
-        prices.append(close_price)
-        regimes.append(regime)
+#         # Store data
+#         timestamps.append(timestamp)
+#         prices.append(close_price)
+#         regimes.append(regime)
     
-    # Create DataFrame for plotting
-    df = pd.DataFrame({
-        'timestamp': timestamps,
-        'price': prices,
-        'regime': regimes
-    })
+#     # Create DataFrame for plotting
+#     df = pd.DataFrame({
+#         'timestamp': timestamps,
+#         'price': prices,
+#         'regime': regimes
+#     })
     
-    # Set timestamp as index
-    df.set_index('timestamp', inplace=True)
+#     # Set timestamp as index
+#     df.set_index('timestamp', inplace=True)
     
-    # Create plot
-    plt.figure(figsize=(14, 8))
+#     # Create plot
+#     plt.figure(figsize=(14, 8))
     
-    # Plot price
-    plt.subplot(2, 1, 1)
-    plt.plot(df.index, df['price'], 'k-', label='Price')
-    plt.title(f'{symbol} Price Chart')
-    plt.ylabel('Price')
-    plt.grid(True)
-    plt.legend()
+#     # Plot price
+#     plt.subplot(2, 1, 1)
+#     plt.plot(df.index, df['price'], 'k-', label='Price')
+#     plt.title(f'{symbol} Price Chart')
+#     plt.ylabel('Price')
+#     plt.grid(True)
+#     plt.legend()
     
-    # Plot regimes as colored background
-    regime_colors = {
-        MarketRegime.UPTREND: 'lightgreen',
-        MarketRegime.DOWNTREND: 'lightcoral',
-        MarketRegime.SIDEWAYS: 'lightyellow',
-        MarketRegime.VOLATILE: 'lightblue',
-        MarketRegime.UNKNOWN: 'white'
-    }
+#     # Plot regimes as colored background
+#     regime_colors = {
+#         MarketRegime.UPTREND: 'lightgreen',
+#         MarketRegime.DOWNTREND: 'lightcoral',
+#         MarketRegime.SIDEWAYS: 'lightyellow',
+#         MarketRegime.VOLATILE: 'lightblue',
+#         MarketRegime.UNKNOWN: 'white'
+#     }
     
-    # Find regime transitions
-    transitions = []
-    prev_regime = None
+#     # Find regime transitions
+#     transitions = []
+#     prev_regime = None
     
-    for i, regime in enumerate(regimes):
-        if regime != prev_regime:
-            transitions.append((i, regime))
-            prev_regime = regime
+#     for i, regime in enumerate(regimes):
+#         if regime != prev_regime:
+#             transitions.append((i, regime))
+#             prev_regime = regime
     
-    # Add final point
-    transitions.append((len(regimes) - 1, prev_regime))
+#     # Add final point
+#     transitions.append((len(regimes) - 1, prev_regime))
     
-    # Plot colored background for each regime segment
-    for i in range(len(transitions) - 1):
-        start_idx = transitions[i][0]
-        end_idx = transitions[i+1][0]
-        regime = transitions[i][1]
-        color = regime_colors.get(regime, 'white')
+#     # Plot colored background for each regime segment
+#     for i in range(len(transitions) - 1):
+#         start_idx = transitions[i][0]
+#         end_idx = transitions[i+1][0]
+#         regime = transitions[i][1]
+#         color = regime_colors.get(regime, 'white')
         
-        plt.axvspan(df.index[start_idx], df.index[end_idx], 
-                    facecolor=color, alpha=0.3)
+#         plt.axvspan(df.index[start_idx], df.index[end_idx], 
+#                     facecolor=color, alpha=0.3)
     
-    # Plot regimes as separate plot
-    plt.subplot(2, 1, 2)
+#     # Plot regimes as separate plot
+#     plt.subplot(2, 1, 2)
     
-    # Convert regimes to numeric values for plotting
-    regime_values = {
-        MarketRegime.UPTREND: 1,
-        MarketRegime.SIDEWAYS: 0,
-        MarketRegime.DOWNTREND: -1,
-        MarketRegime.VOLATILE: 0.5,
-        MarketRegime.UNKNOWN: 0
-    }
+#     # Convert regimes to numeric values for plotting
+#     regime_values = {
+#         MarketRegime.UPTREND: 1,
+#         MarketRegime.SIDEWAYS: 0,
+#         MarketRegime.DOWNTREND: -1,
+#         MarketRegime.VOLATILE: 0.5,
+#         MarketRegime.UNKNOWN: 0
+#     }
     
-    df['regime_value'] = [regime_values.get(r, 0) for r in df['regime']]
+#     df['regime_value'] = [regime_values.get(r, 0) for r in df['regime']]
     
-    # Plot regime values
-    plt.plot(df.index, df['regime_value'], 'k-', linewidth=2)
-    plt.fill_between(df.index, df['regime_value'], 0, 
-                     where=df['regime_value'] > 0, color='green', alpha=0.3)
-    plt.fill_between(df.index, df['regime_value'], 0, 
-                     where=df['regime_value'] < 0, color='red', alpha=0.3)
+#     # Plot regime values
+#     plt.plot(df.index, df['regime_value'], 'k-', linewidth=2)
+#     plt.fill_between(df.index, df['regime_value'], 0, 
+#                      where=df['regime_value'] > 0, color='green', alpha=0.3)
+#     plt.fill_between(df.index, df['regime_value'], 0, 
+#                      where=df['regime_value'] < 0, color='red', alpha=0.3)
     
-    # Add horizontal lines
-    plt.axhline(y=0, color='k', linestyle='-', alpha=0.2)
-    plt.axhline(y=1, color='g', linestyle='--', alpha=0.5)
-    plt.axhline(y=-1, color='r', linestyle='--', alpha=0.5)
+#     # Add horizontal lines
+#     plt.axhline(y=0, color='k', linestyle='-', alpha=0.2)
+#     plt.axhline(y=1, color='g', linestyle='--', alpha=0.5)
+#     plt.axhline(y=-1, color='r', linestyle='--', alpha=0.5)
     
-    # Configure plot
-    plt.title(f'{symbol} Market Regimes')
-    plt.ylabel('Regime')
-    plt.grid(True)
-    plt.yticks([1, 0.5, 0, -1], ['Uptrend', 'Volatile', 'Sideways', 'Downtrend'])
+#     # Configure plot
+#     plt.title(f'{symbol} Market Regimes')
+#     plt.ylabel('Regime')
+#     plt.grid(True)
+#     plt.yticks([1, 0.5, 0, -1], ['Uptrend', 'Volatile', 'Sideways', 'Downtrend'])
     
-    # Show plot
-    plt.tight_layout()
-    plt.show()
+#     # Show plot
+#     plt.tight_layout()
+#     plt.show()
     
-    # Reset data handler
-    data_handler.reset()
+#     # Reset data handler
+#     data_handler.reset()
 
 
 def optimize_for_regimes(data_handler, symbol, detector):
@@ -337,14 +339,24 @@ def optimize_for_regimes(data_handler, symbol, detector):
             bar = data_handler.get_next_bar(symbol)
             if bar is None:
                 break
-                
+
             # Skip bars outside date range
             timestamp = bar.get_timestamp()
+            # Make timestamps compatible for comparison
+            if hasattr(timestamp, 'tzinfo') and timestamp.tzinfo is not None:
+                timestamp = timestamp.replace(tzinfo=None)
+            if start_date and hasattr(start_date, 'tzinfo') and start_date.tzinfo is not None:
+                start_date = start_date.replace(tzinfo=None)
+            if end_date and hasattr(end_date, 'tzinfo') and end_date.tzinfo is not None:
+                end_date = end_date.replace(tzinfo=None)
+
+            # Now compare them safely
             if start_date and timestamp < start_date:
                 continue
             if end_date and timestamp > end_date:
-                break
+                break            
                 
+
             # Process bar with strategy
             signal = strategy.on_bar(bar)
             
@@ -703,7 +715,7 @@ def main():
     # Configuration
     data_dir = os.path.expanduser("~/data")  # Update with your data directory
     symbol = "SPY"
-    timeframe = "1d"
+    timeframe = "1m"
     
     # Check if data directory exists
     if not os.path.exists(data_dir):
@@ -717,9 +729,9 @@ def main():
     print("\nRunning regime detection...")
     detector = detect_market_regimes(data_handler, symbol)
     
-    # 3. Visualize regimes
-    print("\nVisualizing regimes...")
-    visualize_regimes(data_handler, symbol, detector)
+    # # 3. Visualize regimes
+    # print("\nVisualizing regimes...")
+    # visualize_regimes(data_handler, symbol, detector)
     
     # 4. Optimize for different regimes
     print("\nRunning regime-specific optimization...")
