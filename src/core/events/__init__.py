@@ -17,6 +17,8 @@ from .event_bus import EventBus
 
 from .event_manager import EventManager
 
+from .event_utils import EventTracker
+
 from .event_utils import (
     # Event creation
     create_bar_event, create_signal_event, create_order_event, create_fill_event,
@@ -37,6 +39,8 @@ from .event_utils import (
     
     # Processing
     process_events, process_events_async
+
+    
 )
 
 from .event_schema import SchemaValidator
@@ -80,7 +84,7 @@ __all__ = [
     'emit_event_async', 'emit_events_async', 'is_async_handler',
     'wrap_sync_handler', 'wrap_async_handler',
     'transform_events', 'transform_events_async',
-    'process_events', 'process_events_async',
+    'process_events', 'process_events_async', 'EventTracker',
     
     # Event schema
     'SchemaValidator',

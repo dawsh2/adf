@@ -4,12 +4,140 @@ import asyncio
 import inspect
 from typing import Dict, List, Any, Optional, Union, Callable, Coroutine
 
+from collections import defaultdict
+
+
 from .event_types import (
     Event, EventType, BarEvent, SignalEvent, OrderEvent, FillEvent,
     WebSocketEvent, LifecycleEvent, ErrorEvent
 )
 
 # Event creation utility functions
+
+# Add to src/core/events/event_utils.py
+
+class EventTracker:
+    """Utility to track events passing through the system."""
+    
+    def __init__(self, name: str = "event_tracker", verbose: bool = False):
+        """
+        Initialize the event tracker.
+        
+        Args:
+            name: Tracker name
+            verbose: Whether to log detailed event information
+        """
+        self.name = name
+        self.verbose = verbose
+        self.events = defaultdict(list)
+        self.event_counts = defaultdict(int)
+    
+    def track_event(self, event):
+        """
+        Track an event.
+        
+        Args:
+            event: Event to track
+        """
+        event_type = event.get_type()
+        self.events[event_type].append(event)
+        self.event_counts[event_type] += 1
+        
+        # Log the event if verbose
+        if self.verbose:
+            self._log_event(event)
+    
+    def _log_event(self, event):
+        """
+        Log detailed event information.
+        
+        Args:
+            event: Event to log
+        """
+        event_type = event.get_type()
+        event_id = len(self.events[event_type])
+        
+        if event_type == EventType.SIGNAL:
+            symbol = event.get_symbol()
+            signal_value = event.get_signal_value()
+            direction = "BUY" if signal_value == SignalEvent.BUY else "SELL" if signal_value == SignalEvent.SELL else "NEUTRAL"
+            logger.debug(f"Signal [{event_id}]: {symbol} {direction}")
+            
+        elif event_type == EventType.ORDER:
+            symbol = event.get_symbol()
+            direction = event.get_direction()
+            quantity = event.get_quantity()
+            logger.debug(f"Order [{event_id}]: {symbol} {direction} {quantity}")
+            
+        elif event_type == EventType.FILL:
+            symbol = event.get_symbol()
+            direction = event.get_direction()
+            quantity = event.get_quantity()
+            price = event.get_price()
+            logger.debug(f"Fill [{event_id}]: {symbol} {direction} {quantity} @ {price:.2f}")
+            
+        elif event_type == EventType.BAR:
+            symbol = event.get_symbol()
+            timestamp = event.get_timestamp()
+            close = event.get_close()
+            logger.debug(f"Bar [{event_id}]: {symbol} @ {timestamp} - Close: {close:.2f}")
+            
+        else:
+            logger.debug(f"Event [{event_type.name}]: ID={event.get_id()}")
+    
+    def get_summary(self):
+        """
+        Get a summary of tracked events.
+        
+        Returns:
+            dict: Summary of tracked events by type
+        """
+        return {
+            event_type.name: len(events)
+            for event_type, events in self.events.items()
+        }
+        
+    def get_event_count(self, event_type):
+        """
+        Get the count of events of a specific type.
+        
+        Args:
+            event_type: Type of event to count
+            
+        Returns:
+            int: Number of events of the specified type
+        """
+        return self.event_counts.get(event_type, 0)
+    
+    def get_events(self, event_type):
+        """
+        Get all events of a specific type.
+        
+        Args:
+            event_type: Type of events to retrieve
+            
+        Returns:
+            list: Events of the specified type
+        """
+        return self.events.get(event_type, [])
+    
+    def get_last_event(self, event_type):
+        """
+        Get the last event of a specific type.
+        
+        Args:
+            event_type: Type of event to retrieve
+            
+        Returns:
+            Event or None: Last event of the specified type
+        """
+        events = self.events.get(event_type, [])
+        return events[-1] if events else None
+    
+    def reset(self):
+        """Reset the tracker state."""
+        self.events.clear()
+        self.event_counts.clear()
 
 def create_bar_event(symbol, timestamp, open_price, high_price, 
                      low_price, close_price, volume):
