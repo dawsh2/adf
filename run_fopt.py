@@ -6,6 +6,7 @@ This demonstrates how to implement regime detection and regime-specific optimiza
 for trading strategies using the existing component framework.
 """
 import os
+import sys
 import numpy as np
 import pandas as pd
 import datetime
@@ -962,62 +963,85 @@ class RegimeDetector:
                 return regime
                 
         return MarketRegime.UNKNOWN
-    
+
+
     def get_regime_periods(self, symbol, start_date=None, end_date=None):
         """
         Get periods of different regimes for a symbol.
-        
+
         Args:
             symbol: Symbol to analyze
             start_date: Start date for analysis
             end_date: End date for analysis
-            
+
         Returns:
             dict: Dictionary mapping regime types to lists of (start, end) periods
         """
         if not symbol in self.regime_history:
             return {}
-            
+
         history = self.regime_history[symbol]
-        
+
+        # Convert all timestamps to naive datetimes to avoid timezone issues
+        history_naive = []
+        for ts, regime in history:
+            # Remove timezone info if present
+            ts_naive = ts.replace(tzinfo=None) if hasattr(ts, 'tzinfo') and ts.tzinfo else ts
+            history_naive.append((ts_naive, regime))
+
+        # Convert input dates to naive datetimes
+        start_naive = None
+        end_naive = None
+
+        if start_date:
+            if isinstance(start_date, str):
+                start_date = pd.to_datetime(start_date)
+            start_naive = start_date.replace(tzinfo=None) if hasattr(start_date, 'tzinfo') and start_date.tzinfo else start_date
+
+        if end_date:
+            if isinstance(end_date, str):
+                end_date = pd.to_datetime(end_date)
+            end_naive = end_date.replace(tzinfo=None) if hasattr(end_date, 'tzinfo') and end_date.tzinfo else end_date
+
         # Filter by date range if specified
-        if start_date or end_date:
-            if start_date:
-                history = [(ts, regime) for ts, regime in history if ts >= start_date]
-            if end_date:
-                history = [(ts, regime) for ts, regime in history if ts <= end_date]
-                
-        if not history:
+        filtered_history = []
+        for ts, regime in history_naive:
+            if start_naive and ts < start_naive:
+                continue
+            if end_naive and ts > end_naive:
+                continue
+            filtered_history.append((ts, regime))
+
+        if not filtered_history:
             return {}
-            
+
         # Find continuous periods of same regime
-        regime_periods = defaultdict(list)
-        
-        current_regime = history[0][1]
-        period_start = history[0][0]
-        
-        for i in range(1, len(history)):
-            timestamp, regime = history[i]
-            
+        regime_periods = {}
+
+        current_regime = filtered_history[0][1]
+        period_start = filtered_history[0][0]
+
+        for i in range(1, len(filtered_history)):
+            timestamp, regime = filtered_history[i]
+
             # Regime change
             if regime != current_regime:
                 # Store previous period
+                if current_regime not in regime_periods:
+                    regime_periods[current_regime] = []
                 regime_periods[current_regime].append((period_start, timestamp))
-                
+
                 # Start new period
                 current_regime = regime
                 period_start = timestamp
-        
+
         # Add final period
-        if history:
-            regime_periods[current_regime].append((period_start, history[-1][0]))
-            
+        if filtered_history:
+            if current_regime not in regime_periods:
+                regime_periods[current_regime] = []
+            regime_periods[current_regime].append((period_start, filtered_history[-1][0]))
+
         return regime_periods
-    
-    def reset(self):
-        """Reset the detector state."""
-        self.price_history = {}
-        self.regime_history = {}
 
 
 class EnhancedRegimeDetector:
@@ -1210,60 +1234,84 @@ class EnhancedRegimeDetector:
         # Calculate stability (1 - transition rate)
         stability = 1 - (transitions / (len(history) - 1))
         return stability
-    
+
+
     def get_regime_periods(self, symbol, start_date=None, end_date=None):
         """
         Get periods of different regimes for a symbol.
-        
+
         Args:
             symbol: Symbol to analyze
             start_date: Start date for analysis
             end_date: End date for analysis
-            
+
         Returns:
             dict: Dictionary mapping regime types to lists of (start, end) periods
         """
         if not symbol in self.regime_history:
             return {}
-            
+
         history = self.regime_history[symbol]
-        
+
+        # Convert all timestamps to naive datetimes to avoid timezone issues
+        history_naive = []
+        for ts, regime in history:
+            # Remove timezone info if present
+            ts_naive = ts.replace(tzinfo=None) if hasattr(ts, 'tzinfo') and ts.tzinfo else ts
+            history_naive.append((ts_naive, regime))
+
+        # Convert input dates to naive datetimes
+        start_naive = None
+        end_naive = None
+
+        if start_date:
+            if isinstance(start_date, str):
+                start_date = pd.to_datetime(start_date)
+            start_naive = start_date.replace(tzinfo=None) if hasattr(start_date, 'tzinfo') and start_date.tzinfo else start_date
+
+        if end_date:
+            if isinstance(end_date, str):
+                end_date = pd.to_datetime(end_date)
+            end_naive = end_date.replace(tzinfo=None) if hasattr(end_date, 'tzinfo') and end_date.tzinfo else end_date
+
         # Filter by date range if specified
-        if start_date or end_date:
-            if start_date:
-                history = [(ts, regime) for ts, regime in history if ts >= start_date]
-            if end_date:
-                history = [(ts, regime) for ts, regime in history if ts <= end_date]
-                
-        if not history:
+        filtered_history = []
+        for ts, regime in history_naive:
+            if start_naive and ts < start_naive:
+                continue
+            if end_naive and ts > end_naive:
+                continue
+            filtered_history.append((ts, regime))
+
+        if not filtered_history:
             return {}
-            
+
         # Find continuous periods of same regime
         regime_periods = {}
-        
-        current_regime = history[0][1]
-        period_start = history[0][0]
-        
-        for i in range(1, len(history)):
-            timestamp, regime = history[i]
-            
+
+        current_regime = filtered_history[0][1]
+        period_start = filtered_history[0][0]
+
+        for i in range(1, len(filtered_history)):
+            timestamp, regime = filtered_history[i]
+
             # Regime change
             if regime != current_regime:
                 # Store previous period
                 if current_regime not in regime_periods:
                     regime_periods[current_regime] = []
                 regime_periods[current_regime].append((period_start, timestamp))
-                
+
                 # Start new period
                 current_regime = regime
                 period_start = timestamp
-        
+
         # Add final period
-        if history:
+        if filtered_history:
             if current_regime not in regime_periods:
                 regime_periods[current_regime] = []
-            regime_periods[current_regime].append((period_start, history[-1][0]))
-            
+            regime_periods[current_regime].append((period_start, filtered_history[-1][0]))
+
         return regime_periods
     
     def print_regime_summary(self, symbol):
@@ -1430,42 +1478,78 @@ class RegimeSpecificOptimizer:
         }
         
         return regime_params
-    
+
+
     def _detect_regimes(self, data_handler, start_date, end_date):
         """Run regime detection on historical data."""
         symbol = data_handler.get_symbols()[0]
-        
+
         # Reset data handler to start of data
         data_handler.reset()
-        
+
         # Reset detector
         self.regime_detector.reset()
-        
+
+        # Convert string dates to pandas Timestamp objects if needed
+        if isinstance(start_date, str):
+            start_date = pd.to_datetime(start_date)
+        if isinstance(end_date, str):
+            end_date = pd.to_datetime(end_date)
+
+        # Ensure consistent timezone handling
+        # If start_date has timezone but bar timestamp doesn't, make start_date naive
+        # If bar timestamp has timezone but start_date doesn't, make start_date aware
+
         # Process each bar to detect regimes
         bar_count = 0
         while True:
             bar = data_handler.get_next_bar(symbol)
             if bar is None:
                 break
-                
-            # Skip bars outside date range
-            if start_date and bar.get_timestamp() < start_date:
-                continue
-            if end_date and bar.get_timestamp() > end_date:
-                break
-                
+
+            # Get bar timestamp
+            bar_timestamp = bar.get_timestamp()
+
+            # Skip bars outside date range, handling timezone differences
+            if start_date:
+                # Make timestamp comparison timezone-consistent
+                if bar_timestamp.tzinfo is not None and start_date.tzinfo is None:
+                    # Bar has timezone but start_date doesn't, so convert start_date
+                    start_date = start_date.tz_localize(bar_timestamp.tzinfo)
+                elif bar_timestamp.tzinfo is None and start_date.tzinfo is not None:
+                    # Start_date has timezone but bar doesn't, so convert bar timestamp
+                    bar_ts_aware = bar_timestamp.tz_localize(start_date.tzinfo)
+                    if bar_ts_aware < start_date:
+                        continue
+                elif bar_timestamp < start_date:
+                    continue
+
+            if end_date:
+                # Make timestamp comparison timezone-consistent
+                if bar_timestamp.tzinfo is not None and end_date.tzinfo is None:
+                    # Bar has timezone but end_date doesn't, so convert end_date
+                    end_date = end_date.tz_localize(bar_timestamp.tzinfo)
+                elif bar_timestamp.tzinfo is None and end_date.tzinfo is not None:
+                    # End_date has timezone but bar doesn't, so convert bar timestamp
+                    bar_ts_aware = bar_timestamp.tz_localize(end_date.tzinfo)
+                    if bar_ts_aware > end_date:
+                        break
+                elif bar_timestamp > end_date:
+                    break
+
             # Detect regime
             self.regime_detector.update(bar)
             bar_count += 1
-            
+
             if bar_count % 100 == 0:
                 logger.debug(f"Processed {bar_count} bars for regime detection")
-        
+
         logger.info(f"Processed {bar_count} bars for regime detection")
-        
+
         # Reset data handler for optimization
         data_handler.reset()
-    
+
+
     def _count_bars_in_periods(self, data_handler, symbol, periods):
         """Count total bars across multiple time periods."""
         # Reset data handler
@@ -1954,6 +2038,7 @@ class RegimeOptimizer:
 # 4. Example Usage
 #################################################
 
+
 def run_regime_optimization(data_dir, symbols, start_date, end_date, timeframe):
     """
     Run regime-specific optimization on the moving average strategy.
@@ -1966,7 +2051,7 @@ def run_regime_optimization(data_dir, symbols, start_date, end_date, timeframe):
         timeframe: Data timeframe
         
     Returns:
-        dict: Optimization results with regime-specific parameters
+        dict: Optimization results
     """
     print("\n=== Running Regime-Based Optimization ===")
     
@@ -1974,13 +2059,19 @@ def run_regime_optimization(data_dir, symbols, start_date, end_date, timeframe):
     if isinstance(symbols, str):
         symbols = [symbols]
     
-    # Define parameter grid with wider ranges
+    # Convert string dates to pandas Timestamp objects
+    if isinstance(start_date, str):
+        start_date = pd.to_datetime(start_date)
+    if isinstance(end_date, str):
+        end_date = pd.to_datetime(end_date)
+    
+    # Define parameter grid
     param_grid = {
         'fast_window': [3, 5, 8, 10, 15, 20],
         'slow_window': [15, 20, 30, 40, 50, 60]
     }
     
-    # Create data source
+    # Create data source with timezone handling
     data_source = CSVDataSource(
         data_dir=data_dir,
         filename_pattern='{symbol}_{timeframe}.csv',
@@ -2001,6 +2092,30 @@ def run_regime_optimization(data_dir, symbols, start_date, end_date, timeframe):
     # Load data
     for symbol in symbols:
         data_handler.load_data(symbol, start_date=start_date, end_date=end_date, timeframe=timeframe)
+    
+    # Debug output to show what data is available
+    for symbol in symbols:
+        print(f"Symbol {symbol} data:")
+        data_handler.reset()
+        bar_count = 0
+        start_date_seen = None
+        end_date_seen = None
+        
+        while True:
+            bar = data_handler.get_next_bar(symbol)
+            if bar is None:
+                break
+            bar_count += 1
+            
+            if bar_count == 1:
+                start_date_seen = bar.get_timestamp()
+            end_date_seen = bar.get_timestamp()
+        
+        print(f"  Bars: {bar_count}")
+        print(f"  Date range: {start_date_seen} to {end_date_seen}")
+        
+        # Reset data handler
+        data_handler.reset()
     
     # Create enhanced regime detector with debug enabled
     regime_detector = EnhancedRegimeDetector(
@@ -2492,7 +2607,6 @@ def compare_regime_vs_standard(data_dir, symbols, start_date, end_date, timefram
         traceback.print_exc()
         return None
 
-
 if __name__ == "__main__":
     # Use absolute path with tilde expansion
     DATA_DIR = "~/adf/data"  # Path to your data directory
@@ -2502,17 +2616,22 @@ if __name__ == "__main__":
     
     # Define parameters for backtest
     SYMBOL = "SPY"
-    START_DATE = "2024-03-26"
+    START_DATE = "2024-03-26" 
     END_DATE = "2024-04-10"
     TIMEFRAME = "1m"
     
-    # Run demo
-    compare_regime_vs_standard(
+    # Define parameter grid
+    param_grid = {
+        'fast_window': [3, 5, 8, 10, 15, 20],
+        'slow_window': [15, 20, 30, 40, 50, 60]
+    }
+    
+    # Run the optimization
+    print("\n=== Running Regime Optimization ===")
+    optimization_results = run_regime_optimization(
         data_dir=DATA_DIR,
         symbols=[SYMBOL],
         start_date=START_DATE,
         end_date=END_DATE,
         timeframe=TIMEFRAME
     )
-
-   
