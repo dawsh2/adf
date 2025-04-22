@@ -1346,24 +1346,29 @@ class RegimeDetector:
                 print(f"  {regime.value}: {len(periods)} periods, avg length: {avg_length:.1f} bars, max: {max_length:.1f} days")
 
 
+
 class EnhancedRegimeDetector:
     """
-    Enhanced market regime detector that uses multiple indicators to identify regimes.
+    Enhanced market regime detector that uses multiple indicators to identify regimes
+    with increased sensitivity to detect different market conditions.
     """
     
-    def __init__(self, lookback_window=30, trend_lookback=50, volatility_lookback=20,
-                trend_threshold=0.03, volatility_threshold=0.012, 
-                sideways_threshold=0.015, debug=False):
+    def __init__(self, lookback_window=10, trend_lookback=20, volatility_lookback=5,
+                trend_threshold=0.002, volatility_threshold=0.005, 
+                sideways_threshold=0.001, momentum_threshold=0.001,
+                regime_persistence_limit=10, debug=False):
         """
-        Initialize the enhanced regime detector.
+        Initialize the enhanced regime detector with more sensitive parameters.
         
         Args:
-            lookback_window: Primary window for regime analysis
+            lookback_window: Primary window for regime analysis (shorter for responsiveness)
             trend_lookback: Window for trend strength calculation
             volatility_lookback: Window for volatility calculation
-            trend_threshold: Minimum price change for trend detection
-            volatility_threshold: Threshold for high volatility regime
-            sideways_threshold: Max range for sideways market
+            trend_threshold: Minimum price change for trend detection (lower value)
+            volatility_threshold: Threshold for high volatility regime (lower value)
+            sideways_threshold: Max range for sideways market (lower value)
+            momentum_threshold: Threshold for momentum detection
+            regime_persistence_limit: Maximum consecutive bars in same regime
             debug: Enable debug output
         """
         self.lookback_window = lookback_window
@@ -1372,6 +1377,8 @@ class EnhancedRegimeDetector:
         self.trend_threshold = trend_threshold
         self.volatility_threshold = volatility_threshold
         self.sideways_threshold = sideways_threshold
+        self.momentum_threshold = momentum_threshold
+        self.regime_persistence_limit = regime_persistence_limit
         self.debug = debug
         
         # History tracking
@@ -1382,11 +1389,12 @@ class EnhancedRegimeDetector:
         logger.info(f"Enhanced Regime Detector initialized with: lookback={lookback_window}, "
                    f"trend_lookback={trend_lookback}, volatility_lookback={volatility_lookback}")
         logger.info(f"Thresholds: trend={trend_threshold}, volatility={volatility_threshold}, "
-                   f"sideways={sideways_threshold}")
+                   f"sideways={sideways_threshold}, momentum={momentum_threshold}")
 
     def update(self, bar):
         """
         Update detector with new price data and detect current regime.
+        Uses more sensitive parameters to better distinguish between regimes.
 
         Args:
             bar: Bar event with price data
@@ -1408,7 +1416,7 @@ class EnhancedRegimeDetector:
         self.price_history[symbol].append((timestamp, close_price))
 
         # Keep history limited to reasonable size
-        max_lookback = max(self.lookback_window, self.trend_lookback, self.volatility_lookback) * 2
+        max_lookback = max(self.lookback_window, self.trend_lookback, self.volatility_lookback) * 3
         if len(self.price_history[symbol]) > max_lookback:
             self.price_history[symbol] = self.price_history[symbol][-max_lookback:]
 
@@ -1448,6 +1456,15 @@ class EnhancedRegimeDetector:
         price_changes = [recent_prices[i] - recent_prices[i-1] for i in range(1, len(recent_prices))]
         ups = sum(1 for change in price_changes if change > 0)
         consistency = abs((ups / (len(recent_prices) - 1)) - 0.5) * 2  # 0 to 1 scale
+        
+        # 6. Momentum calculation (rate of change of the trend)
+        momentum = 0
+        if len(prices) >= min(self.lookback_window * 2, 20):
+            momentum_window = min(5, len(prices) // 4)
+            recent_changes = [prices[i] / prices[i-momentum_window] - 1 
+                           for i in range(momentum_window, min(len(prices), 20))]
+            if recent_changes:
+                momentum = sum(recent_changes) / len(recent_changes)
 
         # Store indicator values for debugging
         self.indicator_values[symbol] = {
@@ -1455,7 +1472,8 @@ class EnhancedRegimeDetector:
             'long_term_change': long_term_change,
             'volatility': volatility,
             'price_range': price_range,
-            'trend_consistency': consistency
+            'trend_consistency': consistency,
+            'momentum': momentum
         }
 
         # Print debug information
@@ -1466,8 +1484,9 @@ class EnhancedRegimeDetector:
             print(f"  Volatility: {volatility:.2%}")
             print(f"  Price range: {price_range:.2%}")
             print(f"  Trend consistency: {consistency:.2f}")
+            print(f"  Momentum: {momentum:.2%}")
 
-        # IMPROVED REGIME DETECTION LOGIC
+        # IMPROVED REGIME DETECTION LOGIC with more sensitive thresholds
         # Prioritize detection order: volatility → strong trends → weak trends → sideways
 
         # Score different regimes to select the most appropriate one
@@ -1478,53 +1497,74 @@ class EnhancedRegimeDetector:
             MarketRegime.SIDEWAYS: 0
         }
 
-        # Score volatility regime
-        if volatility > self.volatility_threshold:
+        # Score volatility regime with higher weight and lower threshold
+        if volatility > self.volatility_threshold * 0.75:
+            regime_scores[MarketRegime.VOLATILE] += 3
+
+        if price_range > self.sideways_threshold * 2.5:
             regime_scores[MarketRegime.VOLATILE] += 2
 
-        if price_range > self.sideways_threshold * 3:
-            regime_scores[MarketRegime.VOLATILE] += 1
-
-        # Score uptrend regime
-        if short_term_change > self.trend_threshold:
-            regime_scores[MarketRegime.UPTREND] += 1
+        # Score uptrend regime with higher weight and lower threshold
+        if short_term_change > self.trend_threshold * 0.75:
+            regime_scores[MarketRegime.UPTREND] += 2
 
         if long_term_change > 0:
-            regime_scores[MarketRegime.UPTREND] += 1
+            regime_scores[MarketRegime.UPTREND] += 1.5
 
         if consistency > 0.6 and short_term_change > 0:
-            regime_scores[MarketRegime.UPTREND] += 1
+            regime_scores[MarketRegime.UPTREND] += 1.5
+            
+        # Use momentum to boost trend detection
+        if momentum > self.momentum_threshold:
+            regime_scores[MarketRegime.UPTREND] += 2
 
-        # Score downtrend regime
-        if short_term_change < -self.trend_threshold:
-            regime_scores[MarketRegime.DOWNTREND] += 1
+        # Score downtrend regime with higher weight and lower threshold
+        if short_term_change < -self.trend_threshold * 0.75:
+            regime_scores[MarketRegime.DOWNTREND] += 2
 
         if long_term_change < 0:
-            regime_scores[MarketRegime.DOWNTREND] += 1
+            regime_scores[MarketRegime.DOWNTREND] += 1.5
 
         if consistency > 0.6 and short_term_change < 0:
-            regime_scores[MarketRegime.DOWNTREND] += 1
+            regime_scores[MarketRegime.DOWNTREND] += 1.5
+            
+        # Use momentum to boost trend detection
+        if momentum < -self.momentum_threshold:
+            regime_scores[MarketRegime.DOWNTREND] += 2
 
-        # Score sideways regime
+        # Score sideways regime with lower weight
         if abs(short_term_change) < self.sideways_threshold:
-            regime_scores[MarketRegime.SIDEWAYS] += 1
+            regime_scores[MarketRegime.SIDEWAYS] += 0.5  # Reduced weight
 
         if abs(long_term_change) < self.sideways_threshold * 2:
-            regime_scores[MarketRegime.SIDEWAYS] += 1
+            regime_scores[MarketRegime.SIDEWAYS] += 0.5  # Reduced weight
 
         if consistency < 0.4:  # Low trend consistency indicates sideways
-            regime_scores[MarketRegime.SIDEWAYS] += 1
+            regime_scores[MarketRegime.SIDEWAYS] += 0.5  # Reduced weight
+
+        # Apply regime persistence limitation
+        if symbol in self.regime_history and len(self.regime_history[symbol]) >= self.regime_persistence_limit:
+            recent_regimes = [r for _, r in self.regime_history[symbol][-self.regime_persistence_limit:]]
+            most_common_regime = max(set(recent_regimes), key=recent_regimes.count)
+            
+            # If the same regime has persisted too long, reduce its score
+            if most_common_regime == MarketRegime.SIDEWAYS and recent_regimes.count(most_common_regime) >= self.regime_persistence_limit * 0.8:
+                regime_scores[MarketRegime.SIDEWAYS] *= 0.5
+                # Boost other regimes slightly
+                for regime in regime_scores:
+                    if regime != MarketRegime.SIDEWAYS:
+                        regime_scores[regime] *= 1.2
 
         # Select regime with highest score
         regime = max(regime_scores.items(), key=lambda x: x[1])[0]
 
-        # If there's a tie or all scores are 0, use more explicit rules
+        # If there's a tie or all scores are very low, use more explicit rules
         max_score = max(regime_scores.values())
-        if max_score == 0 or len([r for r, s in regime_scores.items() if s == max_score]) > 1:
-            # Fallback rules
-            if volatility > self.volatility_threshold:
+        if max_score < 0.2 or len([r for r, s in regime_scores.items() if s == max_score]) > 1:
+            # Fallback rules with lower thresholds
+            if volatility > self.volatility_threshold * 0.5:
                 regime = MarketRegime.VOLATILE
-            elif abs(short_term_change) < self.sideways_threshold:
+            elif abs(short_term_change) < self.sideways_threshold * 1.5:
                 regime = MarketRegime.SIDEWAYS
             elif short_term_change > 0:
                 regime = MarketRegime.UPTREND
@@ -1538,8 +1578,6 @@ class EnhancedRegimeDetector:
             print(f"Detected regime for {symbol} at {timestamp}: {regime.value} (scores: {regime_scores})")
 
         return regime        
-    
-
     
     def get_current_regime(self, symbol):
         """Get current regime for a symbol."""
@@ -1586,8 +1624,6 @@ class EnhancedRegimeDetector:
         # Calculate stability (1 - transition rate)
         stability = 1 - (transitions / (len(history) - 1))
         return stability
-
-
 
     def get_regime_periods(self, symbol, start_date=None, end_date=None):
         """
@@ -1739,12 +1775,412 @@ class EnhancedRegimeDetector:
 
                 print(f"  {regime.value}: {len(periods)} periods, avg length: {avg_length:.1f} bars, max: {max_length:.1f} days")
     
-
     def reset(self):
         """Reset the detector state."""
         self.price_history = {}
         self.regime_history = {}
         self.indicator_values = {}
+                
+# class EnhancedRegimeDetector:
+#     """
+#     Enhanced market regime detector that uses multiple indicators to identify regimes.
+#     """
+    
+#     def __init__(self, lookback_window=30, trend_lookback=50, volatility_lookback=20,
+#                 trend_threshold=0.03, volatility_threshold=0.012, 
+#                 sideways_threshold=0.015, debug=False):
+#         """
+#         Initialize the enhanced regime detector.
+        
+#         Args:
+#             lookback_window: Primary window for regime analysis
+#             trend_lookback: Window for trend strength calculation
+#             volatility_lookback: Window for volatility calculation
+#             trend_threshold: Minimum price change for trend detection
+#             volatility_threshold: Threshold for high volatility regime
+#             sideways_threshold: Max range for sideways market
+#             debug: Enable debug output
+#         """
+#         self.lookback_window = lookback_window
+#         self.trend_lookback = trend_lookback
+#         self.volatility_lookback = volatility_lookback
+#         self.trend_threshold = trend_threshold
+#         self.volatility_threshold = volatility_threshold
+#         self.sideways_threshold = sideways_threshold
+#         self.debug = debug
+        
+#         # History tracking
+#         self.price_history = {}  # symbol -> list of prices
+#         self.regime_history = {}  # symbol -> list of (timestamp, regime) tuples
+#         self.indicator_values = {}  # symbol -> dict of indicator values
+        
+#         logger.info(f"Enhanced Regime Detector initialized with: lookback={lookback_window}, "
+#                    f"trend_lookback={trend_lookback}, volatility_lookback={volatility_lookback}")
+#         logger.info(f"Thresholds: trend={trend_threshold}, volatility={volatility_threshold}, "
+#                    f"sideways={sideways_threshold}")
+
+#     def update(self, bar):
+#         """
+#         Update detector with new price data and detect current regime.
+
+#         Args:
+#             bar: Bar event with price data
+
+#         Returns:
+#             MarketRegime: Detected market regime
+#         """
+#         symbol = bar.get_symbol()
+#         close_price = bar.get_close()
+#         timestamp = bar.get_timestamp()
+
+#         # Initialize history if needed
+#         if symbol not in self.price_history:
+#             self.price_history[symbol] = []
+#             self.regime_history[symbol] = []
+#             self.indicator_values[symbol] = {}
+
+#         # Add price to history
+#         self.price_history[symbol].append((timestamp, close_price))
+
+#         # Keep history limited to reasonable size
+#         max_lookback = max(self.lookback_window, self.trend_lookback, self.volatility_lookback) * 2
+#         if len(self.price_history[symbol]) > max_lookback:
+#             self.price_history[symbol] = self.price_history[symbol][-max_lookback:]
+
+#         # Need enough history for regime detection
+#         if len(self.price_history[symbol]) < max(self.lookback_window, self.trend_lookback):
+#             regime = MarketRegime.UNKNOWN
+#             self.regime_history[symbol].append((timestamp, regime))
+#             return regime
+
+#         # Extract prices
+#         prices = [price for _, price in self.price_history[symbol]]
+#         recent_prices = prices[-self.lookback_window:]
+
+#         # Calculate key metrics
+#         # 1. Short-term trend
+#         short_term_change = (recent_prices[-1] / recent_prices[0]) - 1
+
+#         # 2. Long-term trend
+#         if len(prices) >= self.trend_lookback:
+#             trend_prices = prices[-self.trend_lookback:]
+#             long_term_change = (trend_prices[-1] / trend_prices[0]) - 1
+#         else:
+#             long_term_change = short_term_change
+
+#         # 3. Short-term volatility (stdev of returns)
+#         returns = []
+#         for i in range(1, min(len(recent_prices), self.volatility_lookback)):
+#             ret = (recent_prices[i] / recent_prices[i-1]) - 1
+#             returns.append(ret)
+
+#         volatility = np.std(returns) * np.sqrt(252) if returns else 0  # Annualized
+
+#         # 4. Price range
+#         price_range = (max(recent_prices) - min(recent_prices)) / np.mean(recent_prices)
+
+#         # 5. Trend consistency - how consistently prices are moving in one direction
+#         price_changes = [recent_prices[i] - recent_prices[i-1] for i in range(1, len(recent_prices))]
+#         ups = sum(1 for change in price_changes if change > 0)
+#         consistency = abs((ups / (len(recent_prices) - 1)) - 0.5) * 2  # 0 to 1 scale
+
+#         # Store indicator values for debugging
+#         self.indicator_values[symbol] = {
+#             'short_term_change': short_term_change,
+#             'long_term_change': long_term_change,
+#             'volatility': volatility,
+#             'price_range': price_range,
+#             'trend_consistency': consistency
+#         }
+
+#         # Print debug information
+#         if self.debug:
+#             print(f"Regime indicators for {symbol} at {timestamp}:")
+#             print(f"  Short-term change: {short_term_change:.2%}")
+#             print(f"  Long-term change: {long_term_change:.2%}")
+#             print(f"  Volatility: {volatility:.2%}")
+#             print(f"  Price range: {price_range:.2%}")
+#             print(f"  Trend consistency: {consistency:.2f}")
+
+#         # IMPROVED REGIME DETECTION LOGIC
+#         # Prioritize detection order: volatility → strong trends → weak trends → sideways
+
+#         # Score different regimes to select the most appropriate one
+        
+#         regime_scores = {
+#             MarketRegime.VOLATILE: 0,
+#             MarketRegime.UPTREND: 0,
+#             MarketRegime.DOWNTREND: 0,
+#             MarketRegime.SIDEWAYS: 0
+#         }
+
+#         # Score volatility regime
+#         if volatility > self.volatility_threshold:
+#             regime_scores[MarketRegime.VOLATILE] += 2
+
+#         if price_range > self.sideways_threshold * 3:
+#             regime_scores[MarketRegime.VOLATILE] += 1
+
+#         # Score uptrend regime
+#         if short_term_change > self.trend_threshold:
+#             regime_scores[MarketRegime.UPTREND] += 1
+
+#         if long_term_change > 0:
+#             regime_scores[MarketRegime.UPTREND] += 1
+
+#         if consistency > 0.6 and short_term_change > 0:
+#             regime_scores[MarketRegime.UPTREND] += 1
+
+#         # Score downtrend regime
+#         if short_term_change < -self.trend_threshold:
+#             regime_scores[MarketRegime.DOWNTREND] += 1
+
+#         if long_term_change < 0:
+#             regime_scores[MarketRegime.DOWNTREND] += 1
+
+#         if consistency > 0.6 and short_term_change < 0:
+#             regime_scores[MarketRegime.DOWNTREND] += 1
+
+#         # Score sideways regime
+#         if abs(short_term_change) < self.sideways_threshold:
+#             regime_scores[MarketRegime.SIDEWAYS] += 1
+
+#         if abs(long_term_change) < self.sideways_threshold * 2:
+#             regime_scores[MarketRegime.SIDEWAYS] += 1
+
+#         if consistency < 0.4:  # Low trend consistency indicates sideways
+#             regime_scores[MarketRegime.SIDEWAYS] += 1
+
+#         # Select regime with highest score
+#         regime = max(regime_scores.items(), key=lambda x: x[1])[0]
+
+#         # If there's a tie or all scores are 0, use more explicit rules
+#         max_score = max(regime_scores.values())
+#         if max_score == 0 or len([r for r, s in regime_scores.items() if s == max_score]) > 1:
+#             # Fallback rules
+#             if volatility > self.volatility_threshold:
+#                 regime = MarketRegime.VOLATILE
+#             elif abs(short_term_change) < self.sideways_threshold:
+#                 regime = MarketRegime.SIDEWAYS
+#             elif short_term_change > 0:
+#                 regime = MarketRegime.UPTREND
+#             else:
+#                 regime = MarketRegime.DOWNTREND
+
+#         # Store regime
+#         self.regime_history[symbol].append((timestamp, regime))
+
+#         if self.debug:
+#             print(f"Detected regime for {symbol} at {timestamp}: {regime.value} (scores: {regime_scores})")
+
+#         return regime        
+    
+
+    
+#     def get_current_regime(self, symbol):
+#         """Get current regime for a symbol."""
+#         if not symbol in self.regime_history or not self.regime_history[symbol]:
+#             return MarketRegime.UNKNOWN
+#         return self.regime_history[symbol][-1][1]
+    
+#     def get_dominant_regime(self, symbol, lookback=None):
+#         """Get the most common regime over a period."""
+#         if not symbol in self.regime_history or not self.regime_history[symbol]:
+#             return MarketRegime.UNKNOWN
+            
+#         history = self.regime_history[symbol]
+#         if lookback:
+#             history = history[-lookback:]
+            
+#         # Count occurrences of each regime
+#         regime_counts = {}
+#         for _, regime in history:
+#             regime_counts[regime] = regime_counts.get(regime, 0) + 1
+            
+#         # Find the most common regime
+#         dominant_regime = max(regime_counts.items(), key=lambda x: x[1])[0]
+#         return dominant_regime
+    
+#     def get_regime_stability(self, symbol, lookback=None):
+#         """Calculate how stable the regime has been (0-1 scale)."""
+#         if not symbol in self.regime_history or not self.regime_history[symbol]:
+#             return 0
+            
+#         history = self.regime_history[symbol]
+#         if lookback:
+#             history = history[-lookback:]
+            
+#         if len(history) <= 1:
+#             return 1  # Only one regime, so it's stable
+            
+#         # Count regime transitions
+#         transitions = 0
+#         for i in range(1, len(history)):
+#             if history[i][1] != history[i-1][1]:
+#                 transitions += 1
+                
+#         # Calculate stability (1 - transition rate)
+#         stability = 1 - (transitions / (len(history) - 1))
+#         return stability
+
+
+
+#     def get_regime_periods(self, symbol, start_date=None, end_date=None):
+#         """
+#         Get periods of different regimes for a symbol.
+
+#         Args:
+#             symbol: Symbol to analyze
+#             start_date: Start date for analysis
+#             end_date: End date for analysis
+
+#         Returns:
+#             dict: Dictionary mapping regime types to lists of (start, end) periods
+#         """
+#         if not symbol in self.regime_history:
+#             return {}
+
+#         history = self.regime_history[symbol]
+
+#         # Convert all timestamps to naive datetimes to avoid timezone issues
+#         history_naive = []
+#         for ts, regime in history:
+#             # Remove timezone info if present
+#             ts_naive = ts.replace(tzinfo=None) if hasattr(ts, 'tzinfo') and ts.tzinfo else ts
+#             history_naive.append((ts_naive, regime))
+
+#         # Convert input dates to naive datetimes
+#         start_naive = None
+#         end_naive = None
+
+#         if start_date:
+#             if isinstance(start_date, str):
+#                 start_date = pd.to_datetime(start_date)
+#             start_naive = start_date.replace(tzinfo=None) if hasattr(start_date, 'tzinfo') and start_date.tzinfo else start_date
+
+#         if end_date:
+#             if isinstance(end_date, str):
+#                 end_date = pd.to_datetime(end_date)
+#             end_naive = end_date.replace(tzinfo=None) if hasattr(end_date, 'tzinfo') and end_date.tzinfo else end_date
+
+#         # Filter by date range if specified
+#         filtered_history = []
+#         for ts, regime in history_naive:
+#             if start_naive and ts < start_naive:
+#                 continue
+#             if end_naive and ts > end_naive:
+#                 continue
+#             filtered_history.append((ts, regime))
+
+#         if not filtered_history:
+#             return {}
+
+#         # Find continuous periods of same regime
+#         regime_periods = {}
+
+#         current_regime = filtered_history[0][1]
+#         period_start = filtered_history[0][0]
+
+#         for i in range(1, len(filtered_history)):
+#             timestamp, regime = filtered_history[i]
+
+#             # Regime change
+#             if regime != current_regime:
+#                 # Store previous period
+#                 if current_regime not in regime_periods:
+#                     regime_periods[current_regime] = []
+#                 regime_periods[current_regime].append((period_start, timestamp))
+
+#                 # Start new period
+#                 current_regime = regime
+#                 period_start = timestamp
+
+#         # Add final period
+#         if filtered_history:
+#             if current_regime not in regime_periods:
+#                 regime_periods[current_regime] = []
+#             regime_periods[current_regime].append((period_start, filtered_history[-1][0]))
+
+#         return regime_periods
+
+#     def print_regime_summary(self, symbol):
+#         """Print a detailed summary of regime detection for a symbol."""
+#         if not symbol in self.regime_history or not self.regime_history[symbol]:
+#             print(f"No regime history for {symbol}")
+#             return
+
+#         # Count regimes
+#         regime_counts = {}
+#         for _, regime in self.regime_history[symbol]:
+#             regime_counts[regime] = regime_counts.get(regime, 0) + 1
+
+#         total = len(self.regime_history[symbol])
+
+#         print(f"\n=== Regime Distribution Summary for {symbol} ===")
+#         print(f"Total bars analyzed: {total}")
+#         print("\nRegime Distribution:")
+
+#         # Print bar chart for visualization
+#         max_count = max(regime_counts.values()) if regime_counts else 0
+#         bar_length = 40  # Maximum bar length for visualization
+
+#         for regime, count in sorted(regime_counts.items(), key=lambda x: x[1], reverse=True):
+#             percentage = (count / total) * 100
+#             bar = "█" * int((count / max_count) * bar_length) if max_count > 0 else ""
+#             print(f"  {regime.value:<10}: {count:>5} ({percentage:>6.2f}%) {bar}")
+
+#         # Calculate regime transitions
+#         transitions = 0
+#         previous_regime = None
+#         transition_counts = {}
+
+#         for _, regime in self.regime_history[symbol]:
+#             if previous_regime is not None and regime != previous_regime:
+#                 transitions += 1
+#                 transition_key = f"{previous_regime.value} → {regime.value}"
+#                 transition_counts[transition_key] = transition_counts.get(transition_key, 0) + 1
+#             previous_regime = regime
+
+#         # Print regime stability metrics
+#         stability = 1 - (transitions / (total - 1)) if total > 1 else 1
+#         print(f"\nRegime Stability: {stability:.2f} (0-1 scale, higher is more stable)")
+#         print(f"Total Regime Transitions: {transitions}")
+
+#         # Print most common transitions
+#         if transition_counts:
+#             print("\nMost Common Transitions:")
+#             for transition, count in sorted(transition_counts.items(), key=lambda x: x[1], reverse=True)[:5]:
+#                 print(f"  {transition}: {count} times")
+
+#         # Print current regime info
+#         if total > 0:
+#             current_regime = self.regime_history[symbol][-1][1]
+#             current_streak = 0
+#             for i in range(len(self.regime_history[symbol])-1, -1, -1):
+#                 if self.regime_history[symbol][i][1] == current_regime:
+#                     current_streak += 1
+#                 else:
+#                     break
+
+#             print(f"\nCurrent Regime: {current_regime.value} (streak: {current_streak} bars)")
+
+#         # Print periods summary
+#         regime_periods = self.get_regime_periods(symbol)
+#         if regime_periods:
+#             print("\nRegime Periods Summary:")
+#             for regime, periods in regime_periods.items():
+#                 total_bars = sum(1 for _ in periods)
+#                 avg_length = total_bars / len(periods) if periods else 0
+#                 max_length = max((end - start).total_seconds() / 86400 for start, end in periods) if periods else 0
+
+#                 print(f"  {regime.value}: {len(periods)} periods, avg length: {avg_length:.1f} bars, max: {max_length:.1f} days")
+    
+
+#     def reset(self):
+#         """Reset the detector state."""
+#         self.price_history = {}
+#         self.regime_history = {}
+#         self.indicator_values = {}
 
 
 class RegimeSpecificOptimizer:
@@ -1785,6 +2221,8 @@ class RegimeSpecificOptimizer:
             dict: Best parameters for each regime
         """
         symbol = data_handler.get_symbols()[0]  # Use first symbol
+        optimization_scores = {}
+        all_param_results = []
 
         # 1. Run regime detection on historical data
         logger.info(f"Performing regime detection on historical data for {symbol}")
@@ -1845,6 +2283,22 @@ class RegimeSpecificOptimizer:
                 regime_best_params, regime_score = self._optimize_for_regime(
                     param_grid, data_handler, evaluation_func, regime, periods, optimize_metric
                 )
+
+                optimization_scores[regime] = regime_score
+
+                self.results = {
+                    'regime_parameters': regime_params,
+                    'baseline_parameters': baseline_params,
+                    'baseline_score': baseline_score,
+                    'regime_periods': {r.value: periods for r, periods in regime_periods.items() if r in regime_periods}
+                }
+
+                # Add optimization scores to results
+                for regime, score in optimization_scores.items():
+                    self.results[f'{regime.value}_score'] = score
+
+                # Store all parameter combinations tested
+                self.results['all_param_results'] = all_param_results
 
                 # Check if regime-specific parameters are better than baseline
                 improvement = (regime_score - baseline_score) / abs(baseline_score) if baseline_score != 0 else float('inf')
@@ -2567,12 +3021,12 @@ def run_regime_optimization(data_dir, symbols, start_date, end_date, timeframe):
     # Create enhanced regime detector with debug enabled
     # Create enhanced regime detector with much more sensitive thresholds
     regime_detector = EnhancedRegimeDetector(
-        lookback_window=15,        # Even shorter window for responsiveness
-        trend_lookback=30,         # Shorter trend window
-        volatility_lookback=10,    # Shorter volatility window
-        trend_threshold=0.005,     # Much lower threshold (0.5% change)
-        volatility_threshold=0.008, # Lower volatility threshold
-        sideways_threshold=0.003,  # Much stricter sideways definition
+        lookback_window=10,           # Shorter window for faster regime changes
+        trend_lookback=20,            # Shorter trend window
+        volatility_lookback=5,        # Very short volatility window
+        trend_threshold=0.002,        # Much lower threshold (0.2% change is enough for a trend)
+        volatility_threshold=0.005,   # Lower volatility threshold
+        sideways_threshold=0.001,     # Much tighter sideways definition
         debug=True
     )
 
@@ -2750,20 +3204,38 @@ def print_comprehensive_report(results, regime_detector, symbol):
                       if params != baseline_params)
     
     print(f"• Number of regimes using custom parameters: {custom_count} out of {len(regime_params)}")
-    
+
+
     # Check regime distribution
     dominant_regime = None
     dominant_pct = 0
-    
-    for regime, count in regime_detector.regime_history.items():
+
+    for regime, regime_data in regime_detector.regime_history.items():
+        # If regime_data is a list, get its length or sum
+        if isinstance(regime_data, list):
+            count = len(regime_data)
+        else:
+            # If it's already a number, use it directly
+            count = regime_data
+
         if count > dominant_pct:
             dominant_pct = count
             dominant_regime = regime
-    
+
+    # Check if dominant_regime exists and is high enough
     if dominant_regime and dominant_pct > 80:
-        print(f"• Market predominantly in {dominant_regime.value} regime ({dominant_pct:.1f}% of data)")
-        print("  Consider using single-regime optimization instead of regime-switching")
-    
+        # Need to check the type of dominant_regime
+        if hasattr(dominant_regime, 'value'):
+            # It's an enum, use the value attribute
+            regime_name = dominant_regime.value
+        else:
+            # It's already a string
+            regime_name = dominant_regime
+
+        print(f"• Market predominantly in {regime_name} regime ({dominant_pct:.1f}% of data)")
+        print("  Consider using single-regime optimization instead of regime-switching")            
+
+
     # Parameter trends
     if custom_count > 0:
         print("\n• Parameter trends by regime:")
@@ -2866,6 +3338,7 @@ def run_regime_backtest(data_dir, symbols, start_date, end_date, timeframe, regi
     # --- Setup Risk Manager ---
     
     # Create simplified risk manager
+    
     risk_manager = SimpleRiskManager(
         portfolio=portfolio,
         event_bus=event_bus,
@@ -2891,13 +3364,18 @@ def run_regime_backtest(data_dir, symbols, start_date, end_date, timeframe, regi
     )
     
     # Create regime detector
-    regime_detector = RegimeDetector(
-        lookback_window=20,
-        trend_threshold=0.05,
-        volatility_threshold=0.015,
-        sideways_threshold=0.02
+    regime_detector = EnhancedRegimeDetector(
+        lookback_window=15,        # Even shorter window for responsiveness
+        trend_lookback=30,         # Shorter trend window
+        volatility_lookback=10,    # Shorter volatility window
+        trend_threshold=0.005,     # Much lower threshold (0.5% change)
+        volatility_threshold=0.008, # Lower volatility threshold
+        sideways_threshold=0.003,  # Much stricter sideways definition
+        debug=True
     )
-    
+
+
+
     # Create regime-aware strategy wrapper
     strategy = RegimeAwareStrategy(base_strategy, regime_detector)
     
