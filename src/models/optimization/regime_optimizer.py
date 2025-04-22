@@ -42,6 +42,35 @@ class RegimeSpecificOptimizer:
         self.optimization_scores = {}  # Track scores by regime
 
 
+    # Add this method to the RegimeSpecificOptimizer class
+    def _get_bars_for_regime(self, data_handler, symbol, regime, start_date=None, end_date=None):
+        """Get all bars that belong to a specific regime."""
+        bars = []
+        data_handler.reset()
+
+        while True:
+            bar = data_handler.get_next_bar(symbol)
+            if bar is None:
+                break
+
+            # Apply date filtering
+            timestamp = bar.get_timestamp()
+            timestamp_comp = timestamp.replace(tzinfo=None) if hasattr(timestamp, 'tzinfo') and timestamp.tzinfo else timestamp
+            start_date_comp = start_date.replace(tzinfo=None) if start_date and hasattr(start_date, 'tzinfo') and start_date.tzinfo else start_date
+            end_date_comp = end_date.replace(tzinfo=None) if end_date and hasattr(end_date, 'tzinfo') and end_date.tzinfo else end_date
+
+            if start_date_comp and timestamp_comp < start_date_comp:
+                continue
+            if end_date_comp and timestamp_comp > end_date_comp:
+                break
+
+            # Check if bar belongs to the specified regime
+            current_regime = self.regime_detector.get_regime_at(symbol, timestamp)
+            if current_regime == regime:
+                bars.append(bar)
+
+        return bars    
+        
     def optimize(self, param_grid: Dict[str, List[Any]], 
                 data_handler, evaluation_func: Callable, 
                 start_date=None, end_date=None, min_regime_bars=30,
@@ -221,130 +250,6 @@ class RegimeSpecificOptimizer:
 
         return regime_params        
 
-    def optimize(self, param_grid: Dict[str, List[Any]], 
-                data_handler, evaluation_func: Callable, 
-                start_date=None, end_date=None, min_regime_bars=30,
-                optimize_metric='sharpe_ratio', min_improvement=0.1) -> Dict[MarketRegime, Dict[str, Any]]:
-        """
-        Perform regime-specific optimization.
-
-        Args:
-            param_grid: Dictionary of parameter names to possible values
-            data_handler: Data handler with loaded data
-            evaluation_func: Function to evaluate parameter combinations
-            start_date: Start date for optimization
-            end_date: End date for optimization
-            min_regime_bars: Minimum bars required for a regime to be optimized
-            optimize_metric: Metric to optimize ('sharpe_ratio', 'return', 'max_drawdown')
-            min_improvement: Minimum improvement required to use regime-specific parameters
-
-        Returns:
-            dict: Best parameters for each regime
-        """
-        symbol = data_handler.get_symbols()[0]  # Use first symbol
-
-        # 1. Run regime detection on historical data
-        logger.info(f"Performing regime detection on historical data for {symbol}")
-        self._detect_regimes(data_handler, start_date, end_date)
-
-        # Print a summary of detected regimes
-        self.regime_detector.print_regime_summary(symbol)
-
-        # 2. Segment data by regime
-        regime_periods = self.regime_detector.get_regime_periods(symbol, start_date, end_date)
-
-        # Print periods for each regime
-        logger.info("\nRegime Periods:")
-        for regime, periods in regime_periods.items():
-            total_days = sum((end - start).total_seconds() / (24 * 3600) for start, end in periods)
-            logger.info(f"  {regime.value}: {len(periods)} periods, {total_days:.1f} days")
-
-        # 3. First, optimize parameters on the entire dataset (baseline)
-        logger.info("\n--- Optimizing Baseline Parameters (All Regimes) ---")
-        baseline_params, baseline_score = self._grid_search(
-            param_grid, 
-            data_handler,
-            evaluation_func,
-            start_date, 
-            end_date,
-            optimize_metric
-        )
-
-        logger.info(f"Baseline parameters: {baseline_params}, Score: {baseline_score:.4f}")
-
-        # 4. For each regime, optimize parameters
-        regime_params = {
-            MarketRegime.UNKNOWN: baseline_params  # Default to baseline for unknown
-        }
-
-        for regime in list(MarketRegime):
-            if regime == MarketRegime.UNKNOWN:
-                continue  # Already set to baseline
-
-            if regime not in regime_periods or not regime_periods[regime]:
-                logger.info(f"No data for {regime.value} regime, using baseline parameters")
-                regime_params[regime] = baseline_params
-                continue
-
-            # Count total bars in this regime
-            try:
-                periods = regime_periods[regime]
-                bar_count = self._count_bars_in_periods(data_handler, symbol, periods)
-
-                if bar_count < min_regime_bars:
-                    logger.info(f"Skipping optimization for {regime.value} - insufficient data ({bar_count} bars)")
-                    regime_params[regime] = baseline_params
-                    continue
-
-                logger.info(f"\n--- Optimizing for {regime.value} regime ({bar_count} bars) ---")
-
-                # First evaluate baseline parameters on this regime's data
-                baseline_regime_score = self._evaluate_in_periods(
-                    baseline_params, 
-                    data_handler, 
-                    evaluation_func, 
-                    periods, 
-                    optimize_metric
-                )
-
-                # Optimize for this regime
-                regime_best_params, regime_score = self._optimize_for_regime(
-                    param_grid, data_handler, evaluation_func, regime, periods, optimize_metric
-                )
-
-                # Store scores for reporting
-                self.optimization_scores[regime] = regime_score
-
-                # Check if regime-specific parameters are better than baseline ON THE SAME REGIME DATA
-                improvement = (regime_score - baseline_regime_score) / abs(baseline_regime_score) if baseline_regime_score != 0 else float('inf')
-
-                if improvement >= min_improvement:
-                    logger.info(f"Best parameters for {regime.value}: {regime_best_params}, "
-                              f"Score: {regime_score:.4f} (Improvement: {improvement:.2%} over baseline {baseline_regime_score:.4f})")
-                    regime_params[regime] = regime_best_params
-                else:
-                    logger.info(f"Parameters for {regime.value} not better than baseline "
-                              f"(Score: {regime_score:.4f} vs baseline {baseline_regime_score:.4f}, Improvement: {improvement:.2%})")
-                    regime_params[regime] = baseline_params
-            except Exception as e:
-                logger.error(f"Error optimizing for {regime.value}: {e}")
-                logger.error(f"Traceback: {traceback.format_exc()}")
-                regime_params[regime] = baseline_params
-
-        # Store and return results
-        self.results = {
-            'regime_parameters': regime_params,
-            'baseline_parameters': baseline_params,
-            'baseline_score': baseline_score,
-            'regime_periods': {r.value: periods for r, periods in regime_periods.items() if r in regime_periods},
-            'all_param_results': self.all_param_results
-        }
-
-        # Add regime scores to results
-        for regime, score in self.optimization_scores.items():
-            self.results[f'{regime.value}_score'] = score
-
-        return regime_params        
 
 
 
