@@ -292,30 +292,42 @@ def optimize_for_regimes(data_handler, symbol, detector):
     def evaluate_strategy(params, data_handler, start_date, end_date):
         """
         Evaluate strategy parameters by running a simplified backtest.
-        
+
         Args:
             params: Strategy parameters
             data_handler: Data handler with loaded data
             start_date: Start date for evaluation
             end_date: End date for evaluation
-            
+
         Returns:
             float: Performance score (Sharpe ratio)
         """
-        fast_window = params['fast_window']
-        slow_window = params['slow_window']
-        
+        # Check if params is None or empty
+        if params is None or not params:
+            logger.error("Empty parameters dictionary passed to evaluate_strategy")
+            # Initialize with default values instead of returning immediately
+            params = {'fast_window': 10, 'slow_window': 30}
+            logger.info(f"Using default parameters: {params}")
+
+        # Add fallback defaults if keys are missing
+        fast_window = params.get('fast_window', 10)
+        slow_window = params.get('slow_window', 30)
+
+        # Log the parameters
+        logger.info(f"Evaluating with params: {params}, fast_window={fast_window}, slow_window={slow_window}")
+
         # Skip invalid parameter combinations
         if fast_window >= slow_window:
+            logger.warning(f"Invalid parameter combination: fast_window ({fast_window}) >= slow_window ({slow_window})")
             return float('-inf')
-        
+
         # Create event system for backtest
         event_bus = EventBus()
         event_tracker = EventTracker()
-        
+
         # Track signals for performance evaluation
         event_bus.register(EventType.SIGNAL, event_tracker.track_event)
-        
+
         # Create strategy
         strategy = MovingAverageCrossoverStrategy(
             name="ma_crossover",
@@ -324,17 +336,17 @@ def optimize_for_regimes(data_handler, symbol, detector):
             slow_window=slow_window
         )
         strategy.set_event_bus(event_bus)
-        
+
         # Reset data handler
         data_handler.reset()
-        
+
         # Run simple backtest
         equity = 100000.0
         position = 0
         entry_price = 0
         returns = []
         dates = []
-        
+
         while True:
             bar = data_handler.get_next_bar(symbol)
             if bar is None:
@@ -354,20 +366,19 @@ def optimize_for_regimes(data_handler, symbol, detector):
             if start_date and timestamp < start_date:
                 continue
             if end_date and timestamp > end_date:
-                break            
-                
+                break
 
             # Process bar with strategy
             signal = strategy.on_bar(bar)
-            
+
             # Simple execution (no slippage or trading costs)
             price = bar.get_close()
             dates.append(timestamp)
-            
+
             # Execute trades based on signals
             if signal:
                 signal_value = signal.get_signal_value()
-                
+
                 # Buy signal
                 if signal_value == 1 and position <= 0:
                     # Close short position if any
@@ -375,11 +386,11 @@ def optimize_for_regimes(data_handler, symbol, detector):
                         profit = entry_price - price
                         equity += profit * abs(position)
                         returns.append(profit / entry_price)
-                    
+
                     # Open long position
                     position = 100
                     entry_price = price
-                    
+
                 # Sell signal
                 elif signal_value == -1 and position >= 0:
                     # Close long position if any
@@ -387,21 +398,28 @@ def optimize_for_regimes(data_handler, symbol, detector):
                         profit = price - entry_price
                         equity += profit * position
                         returns.append(profit / entry_price)
-                    
+
                     # Open short position
                     position = -100
                     entry_price = price
-            
+
         # Calculate performance metrics
         if len(returns) < 5:
+            logger.warning(f"Not enough trades for reliable evaluation: {len(returns)} trades")
             return float('-inf')  # Not enough trades
-            
+
         # Calculate Sharpe ratio
         returns_array = np.array(returns)
+        if np.std(returns_array) <= 0:
+            logger.warning("Standard deviation of returns is zero or negative")
+            return 0
+
         sharpe_ratio = np.mean(returns_array) / np.std(returns_array) * np.sqrt(252)
-        
+        logger.info(f"Evaluation result: Sharpe ratio = {sharpe_ratio:.4f} with {len(returns)} trades")
+
         return sharpe_ratio
-    
+
+
     # Run regime-specific optimization
     regime_params = regime_optimizer.optimize(
         param_grid=param_grid,

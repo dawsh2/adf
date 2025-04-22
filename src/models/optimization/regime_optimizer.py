@@ -62,6 +62,185 @@ class RegimeSpecificOptimizer:
         Returns:
             dict: Best parameters for each regime
         """
+        # Initialize results storage if not already done
+        if not hasattr(self, 'results') or self.results is None:
+            self.results = {}
+
+        # Initialize all_param_results if not already done
+        if not hasattr(self, 'all_param_results') or self.all_param_results is None:
+            self.all_param_results = []
+
+        # Initialize optimization_scores if not already done
+        if not hasattr(self, 'optimization_scores') or self.optimization_scores is None:
+            self.optimization_scores = {}
+
+        symbol = data_handler.get_symbols()[0]  # Use first symbol
+
+        # 1. Run regime detection on historical data
+        logger.info(f"Performing regime detection on historical data for {symbol}")
+        self._detect_regimes(data_handler, start_date, end_date)
+
+        # Print a summary of detected regimes
+        self.regime_detector.print_regime_summary(symbol)
+
+        # 2. Segment data by regime
+        regime_periods = self.regime_detector.get_regime_periods(symbol, start_date, end_date)
+
+        # Print periods for each regime
+        logger.info("\nRegime Periods:")
+        for regime, periods in regime_periods.items():
+            total_days = sum((end - start).total_seconds() / (24 * 3600) for start, end in periods)
+            logger.info(f"  {regime.value}: {len(periods)} periods, {total_days:.1f} days")
+
+        # 3. First, optimize parameters on the entire dataset (baseline)
+        logger.info("\n--- Optimizing Baseline Parameters (All Regimes) ---")
+
+        # Create default parameters from param_grid if not already defined
+        default_params = {}
+        for param, values in param_grid.items():
+            if isinstance(values, list) and values:
+                default_params[param] = values[0]  # Take first value as default
+
+        # Ensure we have at least fast_window and slow_window with valid defaults
+        if 'fast_window' not in default_params and 'fast_window' in param_grid:
+            default_params['fast_window'] = min(param_grid['fast_window'])
+        elif 'fast_window' not in default_params:
+            default_params['fast_window'] = 10
+
+        if 'slow_window' not in default_params and 'slow_window' in param_grid:
+            default_params['slow_window'] = max(param_grid['slow_window'])
+        elif 'slow_window' not in default_params:
+            default_params['slow_window'] = 30
+
+        # Validate default parameters
+        if 'fast_window' in default_params and 'slow_window' in default_params:
+            if default_params['fast_window'] >= default_params['slow_window']:
+                default_params['fast_window'] = default_params['slow_window'] // 2
+
+        logger.info(f"Default parameters (fallback): {default_params}")
+
+        baseline_params, baseline_score = self._grid_search(
+            param_grid, 
+            data_handler,
+            evaluation_func,
+            start_date, 
+            end_date,
+            optimize_metric
+        )
+
+        # Check if baseline optimization failed and use defaults if it did
+        if not baseline_params:
+            logger.warning("Baseline optimization failed, using default parameters")
+            baseline_params = default_params
+            baseline_score = evaluation_func(baseline_params, data_handler, start_date, end_date)
+
+        logger.info(f"Baseline parameters: {baseline_params}, Score: {baseline_score:.4f}")
+
+        # 4. For each regime, optimize parameters
+        regime_params = {
+            MarketRegime.UNKNOWN: baseline_params  # Default to baseline for unknown
+        }
+
+        for regime in list(MarketRegime):
+            if regime == MarketRegime.UNKNOWN:
+                continue  # Already set to baseline
+
+            if regime not in regime_periods or not regime_periods[regime]:
+                logger.info(f"No data for {regime.value} regime, using baseline parameters")
+                regime_params[regime] = baseline_params
+                continue
+
+            # Count total bars in this regime
+            try:
+                periods = regime_periods[regime]
+                bar_count = self._count_bars_in_periods(data_handler, symbol, periods)
+
+                if bar_count < min_regime_bars:
+                    logger.info(f"Skipping optimization for {regime.value} - insufficient data ({bar_count} bars)")
+                    regime_params[regime] = baseline_params
+                    continue
+
+                logger.info(f"\n--- Optimizing for {regime.value} regime ({bar_count} bars) ---")
+
+                # First evaluate baseline parameters on this regime's data
+                baseline_regime_score = self._evaluate_in_periods(
+                    baseline_params, 
+                    data_handler, 
+                    evaluation_func, 
+                    periods, 
+                    optimize_metric
+                )
+
+                # Optimize for this regime
+                try:
+                    regime_best_params, regime_score = self._optimize_for_regime(
+                        param_grid, data_handler, evaluation_func, regime, periods, optimize_metric
+                    )
+
+                    # Check if optimization failed and use baseline if it did
+                    if not regime_best_params:
+                        logger.warning(f"Optimization for {regime.value} failed, using baseline parameters")
+                        regime_best_params = baseline_params
+                        regime_score = baseline_regime_score
+
+                    # Store scores for reporting
+                    self.optimization_scores[regime] = regime_score
+
+                    # Check if regime-specific parameters are better than baseline ON THE SAME REGIME DATA
+                    improvement = (regime_score - baseline_regime_score) / abs(baseline_regime_score) if baseline_regime_score != 0 else float('inf')
+
+                    if improvement >= min_improvement:
+                        logger.info(f"Best parameters for {regime.value}: {regime_best_params}, "
+                                    f"Score: {regime_score:.4f} (Improvement: {improvement:.2%} over baseline {baseline_regime_score:.4f})")
+                        regime_params[regime] = regime_best_params
+                    else:
+                        logger.info(f"Parameters for {regime.value} not better than baseline "
+                                    f"(Score: {regime_score:.4f} vs baseline {baseline_regime_score:.4f}, Improvement: {improvement:.2%})")
+                        regime_params[regime] = baseline_params
+                except Exception as e:
+                    logger.error(f"Error optimizing for {regime.value}: {e}")
+                    logger.error(f"Traceback: {traceback.format_exc()}")
+                    regime_params[regime] = baseline_params
+            except Exception as e:
+                logger.error(f"Error processing regime {regime.value}: {e}")
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                regime_params[regime] = baseline_params
+
+        # Store and return results
+        self.results = {
+            'regime_parameters': regime_params,
+            'baseline_parameters': baseline_params,
+            'baseline_score': baseline_score,
+            'regime_periods': {r.value: periods for r, periods in regime_periods.items() if r in regime_periods},
+            'all_param_results': self.all_param_results
+        }
+
+        # Add regime scores to results
+        for regime, score in self.optimization_scores.items():
+            self.results[f'{regime.value}_score'] = score
+
+        return regime_params        
+
+    def optimize(self, param_grid: Dict[str, List[Any]], 
+                data_handler, evaluation_func: Callable, 
+                start_date=None, end_date=None, min_regime_bars=30,
+                optimize_metric='sharpe_ratio', min_improvement=0.1) -> Dict[MarketRegime, Dict[str, Any]]:
+        """
+        Perform regime-specific optimization.
+
+        Args:
+            param_grid: Dictionary of parameter names to possible values
+            data_handler: Data handler with loaded data
+            evaluation_func: Function to evaluate parameter combinations
+            start_date: Start date for optimization
+            end_date: End date for optimization
+            min_regime_bars: Minimum bars required for a regime to be optimized
+            optimize_metric: Metric to optimize ('sharpe_ratio', 'return', 'max_drawdown')
+            min_improvement: Minimum improvement required to use regime-specific parameters
+
+        Returns:
+            dict: Best parameters for each regime
+        """
         symbol = data_handler.get_symbols()[0]  # Use first symbol
 
         # 1. Run regime detection on historical data
@@ -287,6 +466,7 @@ class RegimeSpecificOptimizer:
 
         return total_bars
 
+
     def _optimize_for_regime(self, param_grid, data_handler, evaluation_func, regime, periods, optimize_metric):
         """
         Optimize parameters for a specific regime.
@@ -300,7 +480,7 @@ class RegimeSpecificOptimizer:
             optimize_metric: Metric to optimize
 
         Returns:
-            tuple: (best_params, best_score, baseline_regime_score)
+            tuple: (best_params, best_score)
         """
         # First, evaluate baseline parameters on regime data
         baseline_params = self.results.get('baseline_parameters', {})
@@ -335,11 +515,13 @@ class RegimeSpecificOptimizer:
 
             # Run grid search
             result = self.grid_optimizer.optimize(param_grid, regime_evaluation)
-            return result['best_params'], result['best_score'], baseline_regime_score
+            # Only return two values
+            return result.get('best_params', {}), result.get('best_score', float('-inf'))
         except Exception as e:
             logger.error(f"Error in regime optimization: {e}")
             logger.error(f"Traceback: {traceback.format_exc()}")
-            raise    
+            # Return default values on error
+            return {}, float('-inf')    
 
 
 
