@@ -41,6 +41,7 @@ class RegimeSpecificOptimizer:
         self.all_param_results = []  # Track all parameter combinations evaluated
         self.optimization_scores = {}  # Track scores by regime
 
+
     def optimize(self, param_grid: Dict[str, List[Any]], 
                 data_handler, evaluation_func: Callable, 
                 start_date=None, end_date=None, min_regime_bars=30,
@@ -118,6 +119,15 @@ class RegimeSpecificOptimizer:
 
                 logger.info(f"\n--- Optimizing for {regime.value} regime ({bar_count} bars) ---")
 
+                # First evaluate baseline parameters on this regime's data
+                baseline_regime_score = self._evaluate_in_periods(
+                    baseline_params, 
+                    data_handler, 
+                    evaluation_func, 
+                    periods, 
+                    optimize_metric
+                )
+
                 # Optimize for this regime
                 regime_best_params, regime_score = self._optimize_for_regime(
                     param_grid, data_handler, evaluation_func, regime, periods, optimize_metric
@@ -126,16 +136,16 @@ class RegimeSpecificOptimizer:
                 # Store scores for reporting
                 self.optimization_scores[regime] = regime_score
 
-                # Check if regime-specific parameters are better than baseline
-                improvement = (regime_score - baseline_score) / abs(baseline_score) if baseline_score != 0 else float('inf')
+                # Check if regime-specific parameters are better than baseline ON THE SAME REGIME DATA
+                improvement = (regime_score - baseline_regime_score) / abs(baseline_regime_score) if baseline_regime_score != 0 else float('inf')
 
                 if improvement >= min_improvement:
                     logger.info(f"Best parameters for {regime.value}: {regime_best_params}, "
-                               f"Score: {regime_score:.4f} (Improvement: {improvement:.2%})")
+                              f"Score: {regime_score:.4f} (Improvement: {improvement:.2%} over baseline {baseline_regime_score:.4f})")
                     regime_params[regime] = regime_best_params
                 else:
                     logger.info(f"Parameters for {regime.value} not better than baseline "
-                               f"(Score: {regime_score:.4f}, Improvement: {improvement:.2%})")
+                              f"(Score: {regime_score:.4f} vs baseline {baseline_regime_score:.4f}, Improvement: {improvement:.2%})")
                     regime_params[regime] = baseline_params
             except Exception as e:
                 logger.error(f"Error optimizing for {regime.value}: {e}")
@@ -154,8 +164,10 @@ class RegimeSpecificOptimizer:
         # Add regime scores to results
         for regime, score in self.optimization_scores.items():
             self.results[f'{regime.value}_score'] = score
-        
-        return regime_params
+
+        return regime_params        
+
+
 
     def _detect_regimes(self, data_handler, start_date, end_date):
         """
@@ -278,7 +290,7 @@ class RegimeSpecificOptimizer:
     def _optimize_for_regime(self, param_grid, data_handler, evaluation_func, regime, periods, optimize_metric):
         """
         Optimize parameters for a specific regime.
-        
+
         Args:
             param_grid: Dictionary of parameter names to possible values
             data_handler: Data handler with loaded data
@@ -286,18 +298,24 @@ class RegimeSpecificOptimizer:
             regime: MarketRegime to optimize for
             periods: List of (start, end) tuples defining time periods for this regime
             optimize_metric: Metric to optimize
-            
+
         Returns:
-            tuple: (best_params, best_score)
+            tuple: (best_params, best_score, baseline_regime_score)
         """
+        # First, evaluate baseline parameters on regime data
+        baseline_params = self.results.get('baseline_parameters', {})
+        baseline_regime_score = self._evaluate_in_periods(
+            baseline_params, data_handler, evaluation_func, periods, optimize_metric
+        )
+
         # Define regime-specific evaluation wrapper
         def regime_evaluation(params):
             """
             Evaluate parameters only on bars in this regime.
-            
+
             Args:
                 params: Parameters to evaluate
-                
+
             Returns:
                 float: Performance score
             """
@@ -317,11 +335,13 @@ class RegimeSpecificOptimizer:
 
             # Run grid search
             result = self.grid_optimizer.optimize(param_grid, regime_evaluation)
-            return result['best_params'], result['best_score']
+            return result['best_params'], result['best_score'], baseline_regime_score
         except Exception as e:
             logger.error(f"Error in regime optimization: {e}")
             logger.error(f"Traceback: {traceback.format_exc()}")
-            raise
+            raise    
+
+
 
     def _evaluate_in_periods(self, params, data_handler, evaluation_func, periods, optimize_metric='sharpe_ratio'):
         """
