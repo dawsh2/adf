@@ -192,18 +192,15 @@ def demo_ensemble_optimization():
     
     # Define weight parameter space
     weight_space = {
-        'weights': {
-            'ma_crossover': [0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
-            'mean_reversion': [0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
-            'momentum': [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
-        }
+        'weight_ma_crossover': [0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
+        'weight_mean_reversion': [0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
+        'weight_momentum': [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
     }
-    
-    # Define weight constraint (sum to 1.0)
+
+    # Define weight constraint (ensure weights don't all equal zero)
     def weight_constraint(params):
-        weights = params.get('weights', {})
-        total = sum(weights.values())
-        return 0.95 <= total <= 1.05  # Allow small rounding errors
+        total = sum(params.values())
+        return total > 0  # As long as some weights are positive, we'll normalize later
     
     ensemble_result = manager.optimize_component(
         target_name="ensemble_strategy",
@@ -296,13 +293,42 @@ def demo_regime_optimization():
     
     return manager, regime_detector, regime_strategy, regime_result
 
-
 def demo_walk_forward_optimization():
     """Demonstrate walk-forward optimization."""
     logger.info("\n===== WALK-FORWARD OPTIMIZATION DEMO =====\n")
     
-    # 1. Load market data
-    data_handler = load_test_data(symbol='SAMPLE')
+    # 1. Load market data - use a wider date range
+    data_handler = load_test_data(symbol='SAMPLE', start_date='2024-03-01', end_date='2024-04-30')
+    
+    # Check if data is available
+    symbol = data_handler.get_symbols()[0]
+    data_handler.reset()
+    
+    # Determine actual date range in the data
+    first_date = None
+    last_date = None
+    bar_count = 0
+    
+    while True:
+        bar = data_handler.get_next_bar(symbol)
+        if bar is None:
+            break
+            
+        date = bar.get_timestamp()
+        if first_date is None:
+            first_date = date
+        last_date = date
+        bar_count += 1
+    
+    # Reset data handler
+    data_handler.reset()
+    
+    logger.info(f"Available data: {bar_count} bars from {first_date} to {last_date}")
+    
+    # If no data is available, return early
+    if bar_count == 0:
+        logger.error("No data available for walk-forward optimization")
+        return None, None
     
     # 2. Create strategy
     ma_strategy = MovingAverageCrossoverStrategy(
@@ -324,7 +350,7 @@ def demo_walk_forward_optimization():
         'slow_window': [20, 30, 40, 50]
     }
     
-    # 6. Run walk-forward optimization
+    # 6. Run walk-forward optimization with the actual date range
     logger.info("Running walk-forward optimization...")
     wf_result = manager.optimize_component(
         target_name="ma_strategy",
@@ -332,8 +358,9 @@ def demo_walk_forward_optimization():
         evaluator_name="sharpe_ratio",
         param_space=param_space,
         data_handler=data_handler,
-        start_date='2024-03-26',
-        end_date='2024-04-26',
+        # Use actual date range instead of fixed strings
+        start_date=first_date,
+        end_date=last_date,
         windows=3,  # Use 3 windows for the demo
         train_size=0.7,
         test_size=0.3
@@ -354,7 +381,6 @@ def demo_walk_forward_optimization():
         logger.info(f"  Test score: {window.get('test_score')}")
     
     return manager, wf_result
-
 
 if __name__ == "__main__":
     # Run demonstrations

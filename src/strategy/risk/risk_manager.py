@@ -174,8 +174,8 @@ class SimpleRiskManager(RiskManagerBase):
         current_state = self.position_state[symbol]
 
         # Log current state and signal for debugging
-        logger.debug(f"Processing signal for {symbol}: Current position: {current_state}, " 
-                    f"Signal: {'BUY' if signal_value == SignalEvent.BUY else 'SELL'}")
+        # logger.debug(f"Processing signal for {symbol}: Current position: {current_state}, " 
+        #             f"Signal: {'BUY' if signal_value == SignalEvent.BUY else 'SELL'}")
 
         # CASE 1: BUY signal
         if signal_value == SignalEvent.BUY:
@@ -193,7 +193,7 @@ class SimpleRiskManager(RiskManagerBase):
                 # Only update state AFTER order is successfully emitted
                 if self._emit_order(order):
                     self.position_state[symbol] = 1  # Mark as long
-                    logger.info(f"Opening LONG position for {symbol}: {self.fixed_size} @ {price:.2f}")
+                    # logger.info(f"Opening LONG position for {symbol}: {self.fixed_size} @ {price:.2f}")
 
             # Case 1B: Currently short - close short position then go long
             elif current_state == -1:
@@ -209,7 +209,7 @@ class SimpleRiskManager(RiskManagerBase):
                 # Only update state AFTER order is successfully emitted
                 cover_success = self._emit_order(cover_order)
                 if cover_success:
-                    logger.info(f"Closing SHORT position for {symbol}: {self.fixed_size} @ {price:.2f}")
+                    # logger.info(f"Closing SHORT position for {symbol}: {self.fixed_size} @ {price:.2f}")
 
                     # Then go long with another order
                     long_order = create_order_event(
@@ -222,13 +222,13 @@ class SimpleRiskManager(RiskManagerBase):
                     )
                     if self._emit_order(long_order):
                         self.position_state[symbol] = 1  # Mark as long
-                        logger.info(f"Opening LONG position for {symbol}: {self.fixed_size} @ {price:.2f}")
+                        # logger.info(f"Opening LONG position for {symbol}: {self.fixed_size} @ {price:.2f}")
                     else:
                         self.position_state[symbol] = 0  # Mark as neutral if second order fails
 
             # Case 1C: Already long - do nothing
-            else:  # current_state == 1
-                logger.info(f"Ignoring BUY signal for {symbol}: already in LONG position")
+            else:  current_state == 1
+                # logger.info(f"Ignoring BUY signal for {symbol}: already in LONG position")
 
         # CASE 2: SELL signal
         elif signal_value == SignalEvent.SELL:
@@ -246,7 +246,7 @@ class SimpleRiskManager(RiskManagerBase):
                 # Only update state AFTER order is successfully emitted
                 close_success = self._emit_order(close_order)
                 if close_success:
-                    logger.info(f"Closing LONG position for {symbol}: {self.fixed_size} @ {price:.2f}")
+                    # logger.info(f"Closing LONG position for {symbol}: {self.fixed_size} @ {price:.2f}")
 
                     # Then go short with another order
                     short_order = create_order_event(
@@ -259,7 +259,7 @@ class SimpleRiskManager(RiskManagerBase):
                     )
                     if self._emit_order(short_order):
                         self.position_state[symbol] = -1  # Mark as short
-                        logger.info(f"Opening SHORT position for {symbol}: {self.fixed_size} @ {price:.2f}")
+                        # logger.info(f"Opening SHORT position for {symbol}: {self.fixed_size} @ {price:.2f}")
                     else:
                         self.position_state[symbol] = 0  # Mark as neutral if second order fails
 
@@ -275,17 +275,17 @@ class SimpleRiskManager(RiskManagerBase):
                     timestamp=timestamp
                 )
                 self.position_state[symbol] = -1  # Mark as short if order succeeds
-                if self._emit_order(order):
-                    logger.info(f"Opening SHORT position for {symbol}: {self.fixed_size} @ {price:.2f}")
+                # if self._emit_order(order):
+                    # logger.info(f"Opening SHORT position for {symbol}: {self.fixed_size} @ {price:.2f}")
 
             # Case 2C: Already short - do nothing
-            else:  # current_state == -1
-                logger.info(f"Ignoring SELL signal for {symbol}: already in SHORT position")
+            # else: current_state == -1
+                # logger.info(f"Ignoring SELL signal for {symbol}: already in SHORT position")
 
         # After signal processing, double-check position state for consistency
         updated_state = self.position_state[symbol]
-        if updated_state != current_state:
-            logger.info(f"Position state changed for {symbol}: {current_state} -> {updated_state}")
+        # if updated_state != current_state:
+        #     logger.info(f"Position state changed for {symbol}: {current_state} -> {updated_state}")
     
 
     def _emit_order(self, order):
@@ -303,8 +303,8 @@ class SimpleRiskManager(RiskManagerBase):
         if self.event_bus:
             try:
                 self.event_bus.emit(order)
-                logger.info(f"Order emitted: {order.get_symbol()} {order.get_direction()} "
-                          f"{order.get_quantity()} @ {order.get_price():.2f}")
+                # logger.info(f"Order emitted: {order.get_symbol()} {order.get_direction()} "
+                #           f"{order.get_quantity()} @ {order.get_price():.2f}")
                 return True
             except Exception as e:
                 logger.error(f"Failed to emit order: {e}")

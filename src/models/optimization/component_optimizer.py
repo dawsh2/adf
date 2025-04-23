@@ -426,19 +426,19 @@ class GeneticOptimizer(ComponentOptimizer):
                 population.append(individual)
         
         return population
-    
+
     def _evolve_population(self, population: List[Dict[str, Any]], 
                          fitnesses: List[float], param_space: Dict[str, List[Any]], 
                          constraints: List[Callable]) -> List[Dict[str, Any]]:
         """
         Create next generation through selection, crossover and mutation.
-        
+
         Args:
             population: Current population
             fitnesses: Fitness scores for current population
             param_space: Dictionary mapping parameter names to possible values
             constraints: List of constraint functions
-            
+
         Returns:
             list: New population
         """
@@ -447,14 +447,20 @@ class GeneticOptimizer(ComponentOptimizer):
         if total_fitness <= 0:
             # If all negative fitnesses, use rank selection
             ranked_indices = sorted(range(len(fitnesses)), key=lambda i: fitnesses[i], reverse=True)
-            selection_probs = [1.0/i for i in range(1, len(ranked_indices)+1)]
+            selection_probs = [(len(ranked_indices) - i) for i in range(len(ranked_indices))]
+            total_probs = sum(selection_probs)
+            selection_probs = [p / total_probs for p in selection_probs]
         else:
             # Use fitness proportionate selection
             selection_probs = [max(0, f)/total_fitness for f in fitnesses]
-        
+
+        # Ensure probabilities sum to 1.0 (fix for potential floating-point errors)
+        if abs(sum(selection_probs) - 1.0) > 1e-10:
+            selection_probs = [p / sum(selection_probs) for p in selection_probs]
+
         # Create new population
         new_population = []
-        
+
         while len(new_population) < self.population_size:
             # Selection - choose two parents
             parent_indices = np.random.choice(
@@ -465,26 +471,27 @@ class GeneticOptimizer(ComponentOptimizer):
             )
             parent1 = population[parent_indices[0]]
             parent2 = population[parent_indices[1]]
-            
+
             # Crossover
             if random.random() < self.crossover_rate:
                 child1, child2 = self._crossover(parent1, parent2, param_space)
             else:
                 child1, child2 = parent1.copy(), parent2.copy()
-            
+
             # Mutation
             child1 = self._mutate(child1, param_space)
             child2 = self._mutate(child2, param_space)
-            
+
             # Add to new population if valid
             if not constraints or all(constraint(child1) for constraint in constraints):
                 new_population.append(child1)
             if len(new_population) < self.population_size:
                 if not constraints or all(constraint(child2) for constraint in constraints):
                     new_population.append(child2)
-        
-        return new_population[:self.population_size]  # Ensure exact population size
+
+        return new_population[:self.population_size]  # Ensure exact population size    
     
+
     def _crossover(self, parent1: Dict[str, Any], parent2: Dict[str, Any], 
                  param_space: Dict[str, List[Any]]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """
@@ -677,69 +684,93 @@ class WalkForwardOptimizer(ComponentOptimizer):
         }
         
         return self.best_result
-    
+
     def _calculate_window_boundaries(self, data_handler, start_date=None, end_date=None):
         """
         Calculate window boundaries for walk-forward analysis.
-        
+
         Args:
             data_handler: Data handler with loaded data
             start_date: Optional start date
             end_date: Optional end date
-            
+
         Returns:
             list: List of (train_start, train_end, test_start, test_end) tuples
         """
         symbol = data_handler.get_symbols()[0]  # Use first symbol
-        
+
+        # Convert string dates to pandas Timestamp objects if needed
+        if isinstance(start_date, str):
+            start_date = pd.to_datetime(start_date)
+        if isinstance(end_date, str):
+            end_date = pd.to_datetime(end_date)
+
         # Get all dates from data handler
         data_handler.reset()
         dates = []
-        
+
         while True:
             bar = data_handler.get_next_bar(symbol)
             if bar is None:
                 break
-                
+
             date = bar.get_timestamp()
-            
-            if start_date and date < start_date:
+
+            # Make date comparisons compatible
+            date_comp = date
+            start_date_comp = start_date
+            end_date_comp = end_date
+
+            # Handle pandas Timestamp vs datetime comparisons
+            if hasattr(pd, 'Timestamp'):
+                if isinstance(date, pd.Timestamp) and not isinstance(start_date, pd.Timestamp):
+                    date_comp = date.to_pydatetime() if hasattr(date, 'to_pydatetime') else date
+
+                if isinstance(start_date, pd.Timestamp) and not isinstance(date, pd.Timestamp):
+                    start_date_comp = start_date.to_pydatetime() if hasattr(start_date, 'to_pydatetime') else start_date
+
+                if isinstance(end_date, pd.Timestamp) and not isinstance(date, pd.Timestamp):
+                    end_date_comp = end_date.to_pydatetime() if hasattr(end_date, 'to_pydatetime') else end_date
+
+            # Check date range
+            if start_date_comp and date_comp < start_date_comp:
                 continue
-            if end_date and date > end_date:
+            if end_date_comp and date_comp > end_date_comp:
                 break
-                
+
             dates.append(date)
-            
+
         if not dates:
             raise ValueError("No data found in specified date range")
-            
+
         # Sort dates
         dates.sort()
-        
+
         # Calculate window size in number of bars
         total_bars = len(dates)
         window_size = total_bars // self.windows
-        
+
         # Create windows
         window_boundaries = []
-        
+
         for i in range(self.windows):
             # Calculate window start and end
             window_start = i * window_size
             window_end = (i + 1) * window_size if i < self.windows - 1 else total_bars
-            
+
             # Calculate train/test split
             split_idx = window_start + int((window_end - window_start) * self.train_size)
-            
+
             train_start = dates[window_start]
             train_end = dates[split_idx - 1]
             test_start = dates[split_idx]
             test_end = dates[window_end - 1]
-            
+
             window_boundaries.append((train_start, train_end, test_start, test_end))
-            
+
         return window_boundaries
     
+
     def _analyze_window_results(self, window_results):
         """
         Analyze window results to find most robust parameters.
@@ -984,43 +1015,79 @@ class RegimeBasedOptimizer(ComponentOptimizer):
         }
         
         return self.best_result
-    
+
+
     def _detect_regimes(self, data_handler, start_date=None, end_date=None):
         """
         Detect regimes in historical data.
-        
+
         Args:
             data_handler: Data handler with loaded data
             start_date: Optional start date
             end_date: Optional end date
         """
         symbol = data_handler.get_symbols()[0]
-        
+
         # Reset data handler
         data_handler.reset()
-        
+
+        # Convert string dates to pandas Timestamp objects if needed
+        if isinstance(start_date, str):
+            start_date = pd.to_datetime(start_date)
+        if isinstance(end_date, str):
+            end_date = pd.to_datetime(end_date)
+
         # Process bars to detect regimes
         bar_count = 0
-        
+
         while True:
             bar = data_handler.get_next_bar(symbol)
             if bar is None:
                 break
-                
+
             # Skip bars outside date range
             date = bar.get_timestamp()
-            
-            if start_date and date < start_date:
-                continue
-            if end_date and date > end_date:
-                break
-                
+
+            # Make sure timestamps can be compared (convert to compatible types)
+            if start_date and not isinstance(date, type(start_date)):
+                if hasattr(pd, 'Timestamp') and isinstance(date, pd.Timestamp):
+                    # Convert both to datetime for comparison
+                    date_comp = date.to_pydatetime()
+                    start_date_comp = start_date.to_pydatetime() if hasattr(start_date, 'to_pydatetime') else start_date
+                    if date_comp < start_date_comp:
+                        continue
+                else:
+                    # Try direct comparison, might fail
+                    if date < start_date:
+                        continue
+            else:
+                # Same types, can compare directly
+                if start_date and date < start_date:
+                    continue
+
+            if end_date and not isinstance(date, type(end_date)):
+                if hasattr(pd, 'Timestamp') and isinstance(date, pd.Timestamp):
+                    # Convert both to datetime for comparison
+                    date_comp = date.to_pydatetime()
+                    end_date_comp = end_date.to_pydatetime() if hasattr(end_date, 'to_pydatetime') else end_date
+                    if date_comp > end_date_comp:
+                        break
+                else:
+                    # Try direct comparison, might fail
+                    if date > end_date:
+                        break
+            else:
+                # Same types, can compare directly
+                if end_date and date > end_date:
+                    break
+
             # Update detector with bar
             self.regime_detector.update(bar)
             bar_count += 1
-            
+
         # Reset data handler
         data_handler.reset()
+
     
     def _count_bars_in_regime(self, data_handler, symbol, periods):
         """
@@ -1062,6 +1129,8 @@ class RegimeBasedOptimizer(ComponentOptimizer):
         data_handler.reset()
         
         return total_bars
+
+    
     
     def _evaluate_in_regime(self, component, evaluation_function, data_handler, periods, **kwargs):
         """
