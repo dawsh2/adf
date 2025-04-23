@@ -49,7 +49,7 @@ class PerformanceCalculator(PerformanceCalculatorBase):
         Returns:
             Dictionary of performance metrics
         """
-        if not equity_curve:
+        if equity_curve is None or equity_curve.empty:
             logger.warning("Empty equity curve provided")
             return self._empty_metrics()
 
@@ -213,6 +213,24 @@ class PerformanceCalculator(PerformanceCalculatorBase):
             'avg_loss': avg_loss,
             'expectancy': expectancy
         })
+
+
+    def _empty_metrics(self):
+        """Return empty metrics dictionary when calculation fails."""
+        return {
+            'sharpe_ratio': 0.0,
+            'sortino_ratio': 0.0,
+            'total_return': 0.0,
+            'annualized_return': 0.0,
+            'volatility': 0.0,
+            'max_drawdown': 0.0,
+            'win_rate': 0.0,
+            'profit_factor': 0.0,
+            'avg_profit_per_trade': 0.0,
+            'avg_loss_per_trade': 0.0,
+            'risk_reward_ratio': 0.0,
+            'trades': 0
+        }
 
 # src/analytics/performance/__init__.py
 from .base import PerformanceCalculatorBase

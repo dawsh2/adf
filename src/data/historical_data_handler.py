@@ -34,7 +34,7 @@ class HistoricalDataHandler(DataHandlerBase):
         self.max_bars_history = max_bars_history
     
     def load_data(self, symbols: Union[str, List[str]], start_date=None, 
-                end_date=None, timeframe='1d') -> None:
+                end_date=None, timeframe='1m') -> None:
         """Load data for the specified symbols."""
         # Convert single symbol to list
         if isinstance(symbols, str):

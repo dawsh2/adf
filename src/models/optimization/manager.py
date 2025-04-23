@@ -11,6 +11,8 @@ from typing import Dict, List, Any, Optional, Callable, Union, Type
 
 from src.models.filters.regime.regime_detector import RegimeDetectorBase, MarketRegime
 from src.models.optimization.component_optimizer import ComponentOptimizer, GridSearchOptimizer
+from src.execution.backtest.backtest import run_backtest
+
 
 logger = logging.getLogger(__name__)
 
@@ -255,7 +257,7 @@ class OptimizationManager:
         
         # Create ensemble
         ensemble = EnsembleStrategy(
-            name=ensemble_name,
+            #            name=ensemble_name,
             strategies=targets,
             weights=weights
         )
@@ -396,7 +398,8 @@ class RegimeAwareOptimizationManager(OptimizationManager):
         # Get parameter space if provided
         param_space = kwargs.pop('param_space', None)
         if param_space is None:
-            param_space = target.get_parameters()
+            #            param_space = target.get_parameters()
+            param_space = component.get_parameters()
         
         # Create evaluation wrapper
         def evaluation_wrapper(comp, **eval_kwargs):

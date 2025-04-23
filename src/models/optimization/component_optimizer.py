@@ -17,6 +17,7 @@ from abc import ABC, abstractmethod
 
 from src.models.filters.regime.regime_detector import RegimeDetectorBase, MarketRegime
 from src.models.optimization.result import OptimizationResult
+from src.execution.backtest.backtest import run_backtest
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,10 @@ class ComponentOptimizer(ABC):
             
         Returns:
             dict: Optimization results
+
+        
         """
+     
         pass
     
     def get_best_result(self) -> Optional[Dict[str, Any]]:
@@ -106,6 +110,11 @@ class GridSearchOptimizer(ComponentOptimizer):
         # Generate all parameter combinations
         param_names = list(param_space.keys())
         param_values = [param_space[name] for name in param_names]
+        param_values = [
+            val if isinstance(val, (list, tuple)) else [val]
+            for val in param_values
+        ]
+        combinations = list(itertools.product(*param_values))
         combinations = list(itertools.product(*param_values))
         total_evaluations = len(combinations)
         

@@ -36,10 +36,10 @@ from src.models.optimization.manager import create_optimization_manager
 from src.models.filters.regime.detector_factory import RegimeDetectorFactory
 
 
-def load_test_data(symbol='SPY', start_date='2024-03-26', end_date='2024-04-26'):
+def load_test_data(symbol='SAMPLE', start_date='2024-03-26', end_date='2024-04-26'):
     """Load historical data for testing."""
     # Configure data directory
-    data_dir = os.path.join('data', 'historical')
+    data_dir = os.path.join('data')
     
     # Create CSV data source
     from src.data.sources.csv_handler import CSVDataSource
@@ -70,12 +70,12 @@ def demo_basic_optimization():
     logger.info("\n===== BASIC OPTIMIZATION DEMO =====\n")
     
     # 1. Load market data
-    data_handler = load_test_data(symbol='SPY')
+    data_handler = load_test_data(symbol='SAMPLE')
     
     # 2. Create strategies
     ma_strategy = MovingAverageCrossoverStrategy(
         name="ma_crossover",
-        symbols=['SPY'],
+        symbols=['SAMPLE'],
         fast_window=10,
         slow_window=30
     )
@@ -133,29 +133,34 @@ def demo_ensemble_optimization():
     logger.info("\n===== ENSEMBLE OPTIMIZATION DEMO =====\n")
     
     # 1. Load market data
-    data_handler = load_test_data(symbol='SPY')
+    data_handler = load_test_data(symbol='SAMPLE')
     
     # 2. Create strategies
     ma_strategy = MovingAverageCrossoverStrategy(
         name="ma_crossover",
-        symbols=['SPY'],
+        symbols=['SAMPLE'],
         fast_window=10,
         slow_window=30
     )
     
     mr_strategy = MeanReversionStrategy(
         name="mean_reversion",
-        symbols=['SPY'],
+        symbols=['SAMPLE'],
         lookback=20,
         z_threshold=1.5
     )
     
     mom_strategy = MomentumStrategy(
         name="momentum",
-        symbols=['SPY'],
+        symbols=['SAMPLE'],
         lookback=10,
         threshold=0.01
     )
+
+    ma_strategy.name = "ma_crossover"
+    mr_strategy.name = "mean_reversion"
+    mom_strategy.name = "momentum"
+
     
     # 3. Create optimization manager
     manager = create_optimization_manager()
@@ -225,7 +230,7 @@ def demo_regime_optimization():
     logger.info("\n===== REGIME-AWARE OPTIMIZATION DEMO =====\n")
     
     # 1. Load market data
-    data_handler = load_test_data(symbol='SPY')
+    data_handler = load_test_data(symbol='SAMPLE')
     
     # 2. Create regime detector
     regime_detector = RegimeDetectorFactory.create_detector('enhanced')
@@ -233,7 +238,7 @@ def demo_regime_optimization():
     # 3. Create strategy
     ma_strategy = MovingAverageCrossoverStrategy(
         name="ma_strategy",
-        symbols=['SPY'],
+        symbols=['SAMPLE'],
         fast_window=10,
         slow_window=30
     )
@@ -297,12 +302,12 @@ def demo_walk_forward_optimization():
     logger.info("\n===== WALK-FORWARD OPTIMIZATION DEMO =====\n")
     
     # 1. Load market data
-    data_handler = load_test_data(symbol='SPY')
+    data_handler = load_test_data(symbol='SAMPLE')
     
     # 2. Create strategy
     ma_strategy = MovingAverageCrossoverStrategy(
         name="ma_strategy",
-        symbols=['SPY'],
+        symbols=['SAMPLE'],
         fast_window=10,
         slow_window=30
     )
