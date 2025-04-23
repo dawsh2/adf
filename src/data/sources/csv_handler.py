@@ -92,7 +92,7 @@ class CSVDataSource(DataSourceBase):
 
     
     def is_available(self, symbol: str, start_date=None, end_date=None, 
-                   timeframe='1d') -> bool:
+                   timeframe='1m') -> bool:
         """Check if data is available for the specified parameters."""
         filename = self._get_filename(symbol, timeframe)
         return os.path.exists(filename)
