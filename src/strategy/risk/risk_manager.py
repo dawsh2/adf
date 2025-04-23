@@ -155,6 +155,9 @@ class SimpleRiskManager(RiskManagerBase):
         # You could add more sophisticated risk checks here
         return True
 
+
+    
+    
     def on_signal(self, event):
         """Process a signal event and produce an order if appropriate."""
         if not isinstance(event, SignalEvent):
@@ -299,17 +302,31 @@ class SimpleRiskManager(RiskManagerBase):
         # Add to order list
         self.orders.append(order)
 
-        # Emit on event bus
-        if self.event_bus:
+        # Initialize success flag
+        success = False
+
+        # Try direct broker placement first if available
+        if hasattr(self, 'broker') and self.broker:
+            try:
+                self.broker.place_order(order)
+                logging.info(f"Order directly placed with broker: {order.get_symbol()} {order.get_direction()} {order.get_quantity()} @ {order.get_price():.2f}")
+                success = True
+            except Exception as e:
+                logging.error(f"Failed to place order with broker: {e}")
+                # Fall back to event bus
+
+        # If broker placement failed or not available, use event bus
+        if not success and self.event_bus:
             try:
                 self.event_bus.emit(order)
-                # logger.info(f"Order emitted: {order.get_symbol()} {order.get_direction()} "
-                #           f"{order.get_quantity()} @ {order.get_price():.2f}")
-                return True
+                logging.info(f"Order emitted via event bus: {order.get_symbol()} {order.get_direction()} {order.get_quantity()} @ {order.get_price():.2f}")
+                success = True
             except Exception as e:
-                logger.error(f"Failed to emit order: {e}")
-                return False
-        return False
+                logging.error(f"Failed to emit order via event bus: {e}")
+
+        return success
+        
+
         
     def reset(self):
         """Reset the risk manager state."""

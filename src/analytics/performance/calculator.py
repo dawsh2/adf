@@ -232,6 +232,40 @@ class PerformanceCalculator(PerformanceCalculatorBase):
             'trades': 0
         }
 
+    def calculate_from_equity(self, equity_curve):
+        """
+        Calculate performance metrics from equity curve only, without trade data.
+        Args:
+            equity_curve: DataFrame with timestamp and equity columns
+        Returns:
+            dict: Performance metrics
+        """
+        # Initialize metrics
+        metrics = {}
+
+        # Calculate return metrics
+        self._calculate_return_metrics(equity_curve, metrics)
+
+        # Calculate risk metrics
+        self._calculate_risk_metrics(equity_curve, metrics)
+
+        # We can't calculate trade metrics without trade data, so add placeholders
+        metrics['num_trades'] = 0
+        metrics['win_rate'] = 0.0
+        metrics['profit_factor'] = 0.0
+        metrics['avg_win'] = 0.0
+        metrics['avg_loss'] = 0.0
+        metrics['max_win'] = 0.0
+        metrics['max_loss'] = 0.0
+
+        # Calculate additional metrics
+        self._calculate_additional_metrics(metrics)
+
+        return metrics
+    
+ 
+
+
 # src/analytics/performance/__init__.py
 from .base import PerformanceCalculatorBase
 from .calculator import PerformanceCalculator

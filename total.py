@@ -36,6 +36,63 @@ from src.models.optimization.manager import create_optimization_manager
 from src.models.filters.regime.detector_factory import RegimeDetectorFactory
 
 
+def test_order_fill_pipeline():
+    """Test that order-fill pipeline works correctly in isolation."""
+    import logging
+    logging.info("\n===== TESTING ORDER-FILL PIPELINE =====\n")
+    
+    # Create core components
+    from src.core.events.event_bus import EventBus
+    from src.core.events.event_types import EventType
+    from src.core.events.event_utils import create_order_event
+    from src.execution.portfolio import PortfolioManager
+    from src.execution.brokers.simulated import SimulatedBroker
+    
+    # Set up event system
+    event_bus = EventBus()
+    
+    # Create portfolio and broker
+    portfolio = PortfolioManager(initial_cash=10000.0)
+    portfolio.set_event_bus(event_bus)
+    
+    broker = SimulatedBroker(fill_emitter=event_bus)
+    broker.set_event_bus(event_bus)
+    
+    # Register portfolio to listen for fills
+    event_bus.register(EventType.FILL, portfolio.on_fill)
+    
+    # Output initial state
+    logging.info(f"Initial portfolio: Cash={portfolio.cash}, Positions={len(portfolio.positions)}")
+    
+    # Create and place a test order
+    test_order = create_order_event(
+        symbol="TEST", 
+        order_type="MARKET",
+        direction="BUY",
+        quantity=100,
+        price=100.0
+    )
+    
+    # Place order directly
+    broker.place_order(test_order)
+    
+    # Output final state
+    logging.info(f"Final portfolio: Cash={portfolio.cash}, Positions={len(portfolio.positions)}")
+    for symbol, position in portfolio.positions.items():
+        logging.info(f"  Position: {symbol} - {position.quantity} shares @ {position.cost_basis:.2f}")
+    
+    # Return success/failure
+    pipeline_working = portfolio.cash != 10000.0 and len(portfolio.positions) > 0
+    
+    if pipeline_working:
+        logging.info("Order-fill pipeline test PASSED! ✓")
+    else:
+        logging.error("Order-fill pipeline test FAILED! ✗")
+    
+    return pipeline_working
+
+
+
 def load_test_data(symbol='SAMPLE', start_date='2024-03-26', end_date='2024-04-26'):
     """Load historical data for testing."""
     # Configure data directory
@@ -382,13 +439,21 @@ def demo_walk_forward_optimization():
     
     return manager, wf_result
 
+
 if __name__ == "__main__":
-    # Run demonstrations
+    # Test order-fill pipeline before running main demo
+    pipeline_ok = test_order_fill_pipeline()
+    
+    if not pipeline_ok:
+        logging.error("Order-fill pipeline is not working correctly - fix before continuing")
+        # Continue anyway for debugging, but be aware results may be incorrect
+    
+    # Continue with the rest of your code
     print("\n" + "="*80)
     print("OPTIMIZATION FRAMEWORK DEMO")
     print("="*80 + "\n")
     
-    # Uncomment the demos you want to run
+    # Run demonstrations
     basic_manager, grid_result, random_result = demo_basic_optimization()
     ensemble_manager, ensemble, ensemble_result = demo_ensemble_optimization()
     regime_manager, regime_detector, regime_strategy, regime_result = demo_regime_optimization()

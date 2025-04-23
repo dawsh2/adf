@@ -471,15 +471,11 @@ class RegimeAwareOptimizationManager(OptimizationManager):
         return regime_strategy
 
 
-# Sample evaluation functions for common metrics
-
+# Sample evaluation functions for common metric
 def evaluate_backtest(component, data_handler, start_date=None, end_date=None, 
                    metric='sharpe_ratio', **kwargs):
     """
     Run a backtest and evaluate a specific performance metric.
-    
-    This is a wrapper around backtest functionality that returns
-    a single metric value for optimization.
     
     Args:
         component: Component to evaluate
@@ -494,7 +490,7 @@ def evaluate_backtest(component, data_handler, start_date=None, end_date=None,
     """
     # Run backtest to get equity curve and trades
     from src.models.optimization.component_optimizer import run_backtest
-    equity_curve, trades = run_backtest(
+    equity_curve, trade_count = run_backtest(
         component=component,
         data_handler=data_handler,
         start_date=start_date,
@@ -502,10 +498,12 @@ def evaluate_backtest(component, data_handler, start_date=None, end_date=None,
         **kwargs
     )
     
-    # Calculate performance metrics
+    # Calculate performance metrics based only on equity curve
     from src.analytics.performance import PerformanceCalculator
     calculator = PerformanceCalculator()
-    metrics = calculator.calculate(equity_curve, trades)
+    
+    # Modify this to avoid using trades for calculations
+    metrics = calculator.calculate_from_equity(equity_curve)
     
     # Return specified metric, or 0 if not found
     metric_value = metrics.get(metric, 0.0)
