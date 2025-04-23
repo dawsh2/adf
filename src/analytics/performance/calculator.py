@@ -35,60 +35,65 @@ class PerformanceCalculator(PerformanceCalculatorBase):
         Returns:
             Value of the metric or None if not found
         """
-        return self.metrics.get(name)        
-    
+        return self.metrics.get(name)
+
     def calculate(self, equity_curve: List[Dict[str, Any]], 
                 trades: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
         Calculate performance metrics from equity curve and trade data.
-        
+
         Args:
             equity_curve: List of equity points with timestamp and value
             trades: Optional list of executed trades
-            
+
         Returns:
             Dictionary of performance metrics
         """
         if not equity_curve:
             logger.warning("Empty equity curve provided")
             return self._empty_metrics()
-        
+
         # Create DataFrame from equity curve
         df = pd.DataFrame(equity_curve)
-        
+
         # Ensure we have timestamp and equity columns
         if 'timestamp' not in df.columns or 'equity' not in df.columns:
             if 'timestamp' not in df.columns and 'date' in df.columns:
                 df['timestamp'] = df['date']
             if 'equity' not in df.columns and 'value' in df.columns:
                 df['equity'] = df['value']
-            
+
             if 'timestamp' not in df.columns or 'equity' not in df.columns:
                 logger.error("Equity curve must contain 'timestamp' and 'equity' columns")
                 return self._empty_metrics()
-        
+
+        # Convert timestamps to pandas datetime if they aren't already
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+
         # Set timestamp as index
         df.set_index('timestamp', inplace=True)
-        
+
         # Calculate returns
         df['returns'] = df['equity'].pct_change()
-        
+
         # Get initial and final values
         initial_equity = df['equity'].iloc[0]
         final_equity = df['equity'].iloc[-1]
-        
-        # Calculate trading period
-        start_date = df.index[0]
-        end_date = df.index[-1]
-        
+
+        # Calculate trading period safely
         try:
-            days = (end_date - start_date).days
+            # Convert to pandas datetime objects
+            start_date = pd.to_datetime(df.index[0])
+            end_date = pd.to_datetime(df.index[-1])
+
+            # Calculate days and years
+            time_delta = end_date - start_date
+            days = time_delta.total_seconds() / (24 * 3600)  # Convert seconds to days
             years = max(days / 365, 0.01)  # Avoid division by zero
         except Exception as e:
             logger.warning(f"Error calculating trading period: {e}")
             days = len(df)
             years = days / self.annualization_factor
-        
 
         # Calculate total return
         total_return = (final_equity / initial_equity) - 1
@@ -105,27 +110,27 @@ class PerformanceCalculator(PerformanceCalculatorBase):
         df['cummax'] = df['equity'].cummax()
         df['drawdown'] = (df['equity'] / df['cummax']) - 1
         max_drawdown = df['drawdown'].min()
-        
+
         # Calculate Sharpe ratio
         daily_risk_free = (1 + self.risk_free_rate) ** (1 / self.annualization_factor) - 1
         excess_returns = df['returns'] - daily_risk_free
         sharpe_ratio = 0
-        
+
         if df['returns'].std() > 0:
             sharpe_ratio = excess_returns.mean() / df['returns'].std() * np.sqrt(self.annualization_factor)
-        
+
         # Calculate Sortino ratio (downside risk only)
         downside_returns = df.loc[df['returns'] < 0, 'returns']
         sortino_ratio = 0
-        
+
         if len(downside_returns) > 0 and downside_returns.std() > 0:
             sortino_ratio = df['returns'].mean() / downside_returns.std() * np.sqrt(self.annualization_factor)
-        
+
         # Calculate Calmar ratio (return / max drawdown)
         calmar_ratio = 0
         if max_drawdown != 0:
             calmar_ratio = annual_return / abs(max_drawdown)
-        
+
         # Store and return metrics
         self.metrics = {
             'initial_equity': initial_equity,
@@ -142,14 +147,13 @@ class PerformanceCalculator(PerformanceCalculatorBase):
             'trading_days': days,
             'trading_years': years
         }
-        
+
         # Add trade-based metrics if trades provided
         if trades:
             self._calculate_trade_metrics(trades)
-        
-        return self.metrics
 
-    # Update src/analytics/performance/calculator.py
+        return self.metrics
+    
 
     def _calculate_trade_metrics(self, trades: List[Any]) -> None:
         """

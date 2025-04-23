@@ -1707,7 +1707,7 @@ def run_regime_aware_backtest(data_handler, symbol, regime_params, detector):
     return equity_curve, signals, regime_transitions
 
 
-def compare_regime_vs_standard(data_handler, symbol, regime_params):
+def compare_regime_vs_standard(data_handler, symbol, regime_params, detector):
     """
     Compare performance of regime-aware strategy vs standard strategy.
     
@@ -1715,6 +1715,7 @@ def compare_regime_vs_standard(data_handler, symbol, regime_params):
         data_handler: Data handler with loaded data
         symbol: Symbol to test
         regime_params: Dictionary of regime-specific parameters
+        detector: Existing detector with regime history
         
     Returns:
         dict: Comparison results
@@ -1791,21 +1792,8 @@ def compare_regime_vs_standard(data_handler, symbol, regime_params):
         })
     
     # Run regime-aware backtest
-    # Create detector first
-    detector = RegimeDetectorFactory.create_detector(
-    detector_type='enhanced',
-        lookback_window=20,              # Shorter lookback for faster response
-        trend_threshold=0.01,            # More sensitive trend detection (was 0.03)
-        volatility_threshold=0.008,      # More sensitive volatility detection (was 0.012)
-        sideways_threshold=0.005,        # Stricter sideways definition (was 0.015)
-        trend_lookback=30,               # Shorter trend lookback
-        volatility_lookback=15,          # Shorter volatility lookback
-        debug=True                       # Enable debug output
-    )
-    # detector = RegimeDetectorFactory.create_preset_detector(
-    #     preset='advanced_sensitive',
-    #     debug=False
-    # )
+    # Just reset the existing detector instead of creating a new one
+    detector.reset()
     
     # Process data to build regime history
     data_handler.reset()
@@ -1816,7 +1804,7 @@ def compare_regime_vs_standard(data_handler, symbol, regime_params):
         detector.update(bar)
     
     # Run regime-aware backtest
-    regime_equity_curve, _, _ = run_regime_aware_backtest(
+    regime_equity_curve, signals, regime_transitions = run_regime_aware_backtest(
         data_handler=data_handler,
         symbol=symbol,
         regime_params=regime_params,
@@ -1831,9 +1819,6 @@ def compare_regime_vs_standard(data_handler, symbol, regime_params):
     regime_final_equity = regime_equity_curve[-1]['equity']
     regime_initial_equity = regime_equity_curve[0]['equity']
     regime_return = (regime_final_equity / regime_initial_equity) - 1
-    
-    # Calculate other metrics (e.g., drawdown, Sharpe ratio)
-    # ...
     
     # Print comparison
     logger.info("\n=== Performance Comparison ===")
@@ -1881,7 +1866,182 @@ def compare_regime_vs_standard(data_handler, symbol, regime_params):
     }
 
 
-# def main():
+# def compare_regime_vs_standard(data_handler, symbol, regime_params):
+#     """
+#     Compare performance of regime-aware strategy vs standard strategy.
+    
+#     Args:
+#         data_handler: Data handler with loaded data
+#         symbol: Symbol to test
+#         regime_params: Dictionary of regime-specific parameters
+        
+#     Returns:
+#         dict: Comparison results
+#     """
+#     logger.info(f"Comparing regime-aware vs standard strategies for {symbol}")
+    
+#     # Get baseline parameters (what would be used without regime optimization)
+#     baseline_params = regime_params[MarketRegime.UNKNOWN]
+    
+#     # Run standard backtest with baseline parameters
+#     event_bus = EventBus()
+#     event_tracker = EventTracker()
+#     event_bus.register(EventType.SIGNAL, event_tracker.track_event)
+    
+#     standard_strategy = MovingAverageCrossoverStrategy(
+#         name="ma_crossover",
+#         symbols=[symbol],
+#         fast_window=baseline_params['fast_window'],
+#         slow_window=baseline_params['slow_window']
+#     )
+#     standard_strategy.set_event_bus(event_bus)
+    
+#     # Run simple backtest for standard strategy
+#     equity = 100000.0
+#     position = 0
+#     entry_price = 0
+#     standard_equity_curve = []
+    
+#     # Reset data handler
+#     data_handler.reset()
+    
+#     while True:
+#         bar = data_handler.get_next_bar(symbol)
+#         if bar is None:
+#             break
+            
+#         # Current timestamp and price
+#         timestamp = bar.get_timestamp()
+#         price = bar.get_close()
+        
+#         # Process bar with strategy
+#         signal = standard_strategy.on_bar(bar)
+        
+#         # Execute trades based on signals
+#         if signal:
+#             signal_value = signal.get_signal_value()
+            
+#             # Buy signal
+#             if signal_value == 1 and position <= 0:
+#                 # Close short position if any
+#                 if position < 0:
+#                     profit = entry_price - price
+#                     equity += profit * abs(position)
+                
+#                 # Open long position
+#                 position = 100
+#                 entry_price = price
+                
+#             # Sell signal
+#             elif signal_value == -1 and position >= 0:
+#                 # Close long position if any
+#                 if position > 0:
+#                     profit = price - entry_price
+#                     equity += profit * position
+                
+#                 # Open short position
+#                 position = -100
+#                 entry_price = price
+        
+#         # Record equity
+#         standard_equity_curve.append({
+#             'timestamp': timestamp,
+#             'equity': equity + position * (price - entry_price)
+#         })
+    
+#     # Run regime-aware backtest
+#     # Create detector first
+#     detector.reset()
+#     # detector = RegimeDetectorFactory.create_detector(
+#     # detector_type='enhanced',
+#     #     lookback_window=20,              # Shorter lookback for faster response
+#     #     trend_threshold=0.01,            # More sensitive trend detection (was 0.03)
+#     #     volatility_threshold=0.008,      # More sensitive volatility detection (was 0.012)
+#     #     sideways_threshold=0.005,        # Stricter sideways definition (was 0.015)
+#     #     trend_lookback=30,               # Shorter trend lookback
+#     #     volatility_lookback=15,          # Shorter volatility lookback
+#     #     debug=True                       # Enable debug output
+#     # )
+#     # detector = RegimeDetectorFactory.create_preset_detector(
+#     #     preset='advanced_sensitive',
+#     #     debug=False
+#     # )
+    
+#     # Process data to build regime history
+#     data_handler.reset()
+#     while True:
+#         bar = data_handler.get_next_bar(symbol)
+#         if bar is None:
+#             break
+#         detector.update(bar)
+    
+#     # Run regime-aware backtest
+#     regime_equity_curve, _, _ = run_regime_aware_backtest(
+#         data_handler=data_handler,
+#         symbol=symbol,
+#         regime_params=regime_params,
+#         detector=detector
+#     )
+    
+#     # Calculate performance metrics
+#     standard_final_equity = standard_equity_curve[-1]['equity']
+#     standard_initial_equity = standard_equity_curve[0]['equity']
+#     standard_return = (standard_final_equity / standard_initial_equity) - 1
+    
+#     regime_final_equity = regime_equity_curve[-1]['equity']
+#     regime_initial_equity = regime_equity_curve[0]['equity']
+#     regime_return = (regime_final_equity / regime_initial_equity) - 1
+    
+#     # Calculate other metrics (e.g., drawdown, Sharpe ratio)
+#     # ...
+    
+#     # Print comparison
+#     logger.info("\n=== Performance Comparison ===")
+#     logger.info(f"Standard Strategy Return: {standard_return:.2%}")
+#     logger.info(f"Regime-Aware Strategy Return: {regime_return:.2%}")
+#     logger.info(f"Improvement: {(regime_return - standard_return):.2%}")
+    
+#     # Plot equity curves
+#     plt.figure(figsize=(12, 6))
+    
+#     # Convert to DataFrames
+#     df_standard = pd.DataFrame(standard_equity_curve)
+#     df_standard.set_index('timestamp', inplace=True)
+    
+#     df_regime = pd.DataFrame(regime_equity_curve)
+#     df_regime.set_index('timestamp', inplace=True)
+    
+#     # Plot
+#     plt.plot(df_standard.index, df_standard['equity'], 'b-', 
+#              label=f'Standard Strategy: {standard_return:.2%}')
+#     plt.plot(df_regime.index, df_regime['equity'], 'g-', 
+#              label=f'Regime-Aware Strategy: {regime_return:.2%}')
+    
+#     plt.title(f'{symbol} Strategy Comparison')
+#     plt.xlabel('Date')
+#     plt.ylabel('Equity ($)')
+#     plt.grid(True)
+#     plt.legend()
+#     plt.tight_layout()
+#     plt.show()
+    
+#     # Return comparison results
+#     return {
+#         'standard': {
+#             'return': standard_return,
+#             'final_equity': standard_final_equity,
+#             'equity_curve': standard_equity_curve
+#         },
+#         'regime_aware': {
+#             'return': regime_return,
+#             'final_equity': regime_final_equity,
+#             'equity_curve': regime_equity_curve
+#         },
+#         'improvement': regime_return - standard_return
+#     }
+
+
+# # def main():
 #     """Main function to run the example."""
 #     print("\n=== Regime-Based Optimization Example ===\n")
     
@@ -1954,6 +2114,9 @@ def main():
     # 2. Detect market regimes
     print("\nRunning regime detection...")
     detector = detect_market_regimes(data_handler, symbol, balance_regimes=True)
+
+
+
     
     # # 3. Visualize regimes
     # print("\nVisualizing regimes...")
@@ -1965,7 +2128,7 @@ def main():
     
     # 5. Compare regime-aware vs standard strategies
     print("\nComparing regime-aware vs standard strategies...")
-    comparison = compare_regime_vs_standard(data_handler, symbol, regime_params)
+    comparison = compare_regime_vs_standard(data_handler, symbol, regime_params, detector)
     
     print("\nExample completed! Check the plots for visualization.")
 
