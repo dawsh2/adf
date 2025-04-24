@@ -127,60 +127,77 @@ class RegimeFilteredMAStrategy:
             'allowed_regimes': self.allowed_regimes
         }
         return params
-    
+
+    # In regime_filtered_ma_strategy.py
     def on_bar(self, event):
         """
         Process a bar event, detect regime, and apply filtering to signals.
-        
+
         Args:
             event: BarEvent to process
-            
+
         Returns:
             Optional[SignalEvent]: Filtered signal event or None
         """
         if not isinstance(event, BarEvent):
             return None
-            
+
         symbol = event.get_symbol()
-        
+
         # Check if we should process this symbol
         if symbol not in self.symbols:
             return None
-            
+
         # First, update regime detection if we have a detector
         if self.regime_detector:
             regime = self.regime_detector.update(event)
             self.current_regimes[symbol] = regime
-            
+
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(f"Current regime for {symbol}: {regime.value}")
         else:
             # Default to unknown regime if no detector
             regime = MarketRegime.UNKNOWN
             self.current_regimes[symbol] = regime
-        
-        # Get signal from base MA strategy
+
+        # Get signal from base MA strategy (don't emit this signal yet)
+        # We're only using the base strategy to generate potential signals
+        # The event bus emission happens after regime filtering
+        original_event_bus = self.ma_strategy.event_bus
+        self.ma_strategy.event_bus = None  # Temporarily disable event bus
+
         signal = self.ma_strategy.on_bar(event)
-        
-        # If no signal or no regime detector, just pass through
-        if not signal or not self.regime_detector:
-            return signal
-            
+
+        # Restore original event bus to base strategy
+        self.ma_strategy.event_bus = original_event_bus
+
+        # If no signal generated, nothing to filter
+        if not signal:
+            return None
+
         # Apply regime filtering
         signal_value = signal.get_signal_value()
         allowed_signals = self.allowed_regimes.get(regime, [])
-        
+
         # Check if signal is allowed in current regime
         if signal_value in allowed_signals:
             # Signal passes regime filter
             self.passed_signals += 1
             logger.debug(f"Signal {signal_value} allowed in regime {regime.value} for {symbol}")
+
+            # Emit signal through event bus
+            if self.event_bus:
+                self.event_bus.emit(signal)
+                logger.debug(f"Emitted signal event to event bus for {symbol}")
+
             return signal
         else:
             # Signal blocked by regime filter
             self.filtered_signals += 1
             logger.debug(f"Signal {signal_value} filtered out in regime {regime.value} for {symbol}")
             return None
+    
+ 
     
     def get_regime_stats(self):
         """Get statistics about regime filtering."""
