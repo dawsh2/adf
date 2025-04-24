@@ -863,49 +863,26 @@ def log_system_metrics(metrics):
 
 
 def compare_results(independent_results, system_results):
-    """
-    Compare results from independent tracking and system backtest.
-    
-    Args:
-        independent_results: Results from independent tracking
-        system_results: Results from system backtest
-        
-    Returns:
-        dict: Comparison results
-    """
+    """Compare results from independent tracking and system backtest."""
     logger.info("=== COMPARING BACKTEST RESULTS ===")
     
     # Extract metrics
     ind_metrics = independent_results['tracker_metrics']
     
-    # Handle different structures in system_results
-    if 'metrics' in system_results:
+    # For system metrics, prioritize trade statistics over return calculation
+    if 'metrics' in system_results and 'total_pnl' in system_results['metrics']:
         sys_metrics = system_results['metrics']
+        sys_trade_count = sys_metrics.get('trade_count', 0)
+        sys_total_pnl = sys_metrics.get('total_pnl', 0)
     else:
-        # If system doesn't provide metrics directly, calculate from trades
+        # Fallback: calculate from trade list
         sys_trades = system_results.get('trades', [])
-        sys_metrics = {
-            'trade_count': len(sys_trades),
-            'total_pnl': sum(t.get('pnl', 0) for t in sys_trades if isinstance(t, dict))
-        }
+        sys_trade_count = len(sys_trades)
+        sys_total_pnl = sum(t.get('pnl', 0) for t in sys_trades if isinstance(t, dict))
     
     # Extract independent metrics
     ind_trade_count = ind_metrics.get('total_trades', 0)
     ind_total_pnl = ind_metrics.get('total_pnl', 0)
-    
-    # Extract system metrics
-    sys_trade_count = sys_metrics.get('trade_count', 0)
-    
-    # Try to get total P&L directly from trade statistics
-    if 'total_pnl' in sys_metrics:
-        sys_total_pnl = sys_metrics['total_pnl']
-    else:
-        # Fall back to calculating from return if needed
-        if 'total_return' in sys_metrics:
-            initial_equity = sys_metrics.get('initial_equity', 10000.0)
-            sys_total_pnl = (sys_metrics['total_return'] / 100) * initial_equity
-        else:
-            sys_total_pnl = 0
     
     # Compare metrics
     results = {
@@ -931,21 +908,7 @@ def compare_results(independent_results, system_results):
     logger.info("Validation Results:")
     for metric, data in results['metrics_compared'].items():
         match_str = "✓" if data['match'] else "✗"
-        ind_value = data['independent']
-        sys_value = data['system']
-        
-        # Format values appropriately based on type
-        if isinstance(ind_value, float):
-            ind_formatted = f"{ind_value:.2f}"
-        else:
-            ind_formatted = str(ind_value)
-            
-        if isinstance(sys_value, float):
-            sys_formatted = f"{sys_value:.2f}"
-        else:
-            sys_formatted = str(sys_value)
-            
-        logger.info(f"{match_str} {metric}: Independent={ind_formatted}, System={sys_formatted}")
+        logger.info(f"{match_str} {metric}: Independent={data['independent']}, System={data['system']}")
     
     if validation_passed:
         logger.info("✓ VALIDATION PASSED - Independent tracking matches system results")
