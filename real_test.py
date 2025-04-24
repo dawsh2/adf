@@ -151,7 +151,7 @@ def run_real_data_test():
     logger.info("=== STARTING MEAN REVERSION STRATEGY TEST ON REAL DATA ===")
     
     # Data file path
-    csv_file = 'data/SAMPLE_1m.csv'
+    csv_file = 'data/SPY_1m.csv'
     if not os.path.exists(csv_file):
         logger.error(f"Data file not found: {csv_file}")
         return False
