@@ -43,6 +43,9 @@ from src.execution.backtest.backtest import run_backtest
 from src.models.optimization.manager import create_optimization_manager
 from src.models.filters.regime.detector_factory import RegimeDetectorFactory
 
+# Import optimization validator 
+from src.models.optimization import OptimizationValidator
+
 
 
 def debug_csv_loading(file_path='data/SAMPLE_1m.csv'):
@@ -368,6 +371,7 @@ def demo_walk_forward_optimization():
         equity_curve, trades = run_backtest(
             component=component,
             data_handler=data_handler,
+            position_size=10,
             start_date=start_date,
             end_date=end_date
         )

@@ -1,5 +1,5 @@
 """
-Improved simulated broker with better execution handling.
+Fixed simulated broker with proper fill emission handling.
 """
 import datetime
 import random
@@ -60,7 +60,7 @@ class SimulatedBroker:
         requested_price = order.get_price()
         
         # Log for debugging
-        logger.debug(f"Processing order: {symbol} {direction} {quantity} @ {requested_price}")
+        #logger.debug(f"Processing order: {symbol} {direction} {quantity} @ {requested_price}")
         
         # Get current market price
         market_price = self.get_market_price(symbol)
@@ -84,10 +84,10 @@ class SimulatedBroker:
         )
         
         # Log fill creation
-        logger.debug(f"Created fill: {symbol} {direction} {quantity} @ {execution_price}")
+        #logger.info(f"Created fill: {symbol} {direction} {quantity} @ {execution_price}")
         
-        # Emit fill event
-        self.emit_fill(fill)
+        # Emit fill event - FIX: Use a more robust emission method
+        self._emit_fill(fill)
     
     def cancel_order(self, order_id):
         """Cancel a simulated order."""
@@ -108,27 +108,49 @@ class SimulatedBroker:
         """Update market data for a symbol."""
         self.market_data[symbol] = data
     
-    def emit_fill(self, fill):
+    def _emit_fill(self, fill):
         """
-        Emit a fill event.
+        Emit a fill event - Fixed implementation to ensure fills are properly emitted.
         
         Args:
             fill: Fill event to emit
         """
-        # Use either direct fill emitter or event bus
-        if self.fill_emitter:
-            logger.debug(f"Emitting fill via fill_emitter: {fill.get_symbol()}")
-            if hasattr(self.fill_emitter, 'emit'):
-                self.fill_emitter.emit(fill)
-            else:
-                # Assume fill_emitter is the event bus
-                logger.debug(f"Using fill_emitter as event bus directly")
-                self.fill_emitter.emit(fill)
-        elif self.event_bus:
-            logger.debug(f"Emitting fill via event_bus: {fill.get_symbol()}")
-            self.event_bus.emit(fill)
-        else:
-            logger.warning("No fill emitter or event bus - fill not emitted!")
+        # Log that we're emitting a fill
+        #logger.info(f"Emitting fill: {fill.get_symbol()} {fill.get_direction()} {fill.get_quantity()} @ {fill.get_price()}")
+        
+        try:
+            # Try all possible emission methods to ensure it works
+            
+            # First try the specific fill_emitter if provided
+            fill_emitted = False
+            if self.fill_emitter:
+                try:
+                    if hasattr(self.fill_emitter, 'emit'):
+                        self.fill_emitter.emit(fill)
+                        fill_emitted = True
+                        #logger.info("Fill emitted via fill_emitter.emit")
+                    else:
+                        # Assume fill_emitter is directly callable
+                        self.fill_emitter(fill)
+                        fill_emitted = True
+                        #logger.info("Fill emitted via direct fill_emitter call")
+                except Exception as e:
+                    logger.error(f"Error emitting fill via fill_emitter: {e}")
+            
+            # Then try event_bus as backup
+            if not fill_emitted and self.event_bus:
+                try:
+                    self.event_bus.emit(fill)
+                    fill_emitted = True
+                    logger.info("Fill emitted via event_bus")
+                except Exception as e:
+                    logger.error(f"Error emitting fill via event_bus: {e}")
+            
+            # Log error if no emission method worked
+            if not fill_emitted:
+                logger.error("Failed to emit fill event - no working emitter found!")
+        except Exception as e:
+            logger.error(f"Unexpected error in fill emission: {e}")
     
     def _calculate_commission(self, price, quantity):
         """Calculate commission for a trade."""

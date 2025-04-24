@@ -1,13 +1,21 @@
+"""
+Fixed portfolio position tracking with proper equity calculation.
+"""
 from typing import Dict, List, Any, Optional
 import datetime
+import logging
 
 from src.core.events.event_types import FillEvent, EventType
-from src.execution.position import Position
 
+# Add proper logger initialization
+logger = logging.getLogger(__name__)
+
+# Import the fixed Position class
+from src.execution.position import Position
 
 class PortfolioManager:
     """
-    Tracks the current state of the portfolio.
+    Tracks the current state of the portfolio with proper P&L accounting.
     Listens for fill events to update positions and cash.
     """
     
@@ -18,6 +26,20 @@ class PortfolioManager:
         self.fill_history = []
         self.event_bus = event_bus
         self.last_update_time = datetime.datetime.now()
+        
+        # Track equity history
+        self.equity_history = [{
+            'timestamp': datetime.datetime.now(),
+            'cash': initial_cash,
+            'position_value': 0.0,
+            'equity': initial_cash
+        }]
+        
+        # Track total commissions and fees
+        self.total_commission = 0.0
+        
+        # Track all transactions for debugging
+        self.transactions = []
     
     def set_event_bus(self, event_bus):
         """Set the event bus."""
@@ -33,7 +55,18 @@ class PortfolioManager:
         direction = event.get_direction()
         quantity = event.get_quantity()
         price = event.get_price()
-        commission = event.get_commission()
+        commission = event.get_commission() if hasattr(event, 'get_commission') else 0.0
+        
+        # Track transaction
+        self.transactions.append({
+            'type': 'FILL',
+            'symbol': symbol,
+            'direction': direction,
+            'quantity': quantity,
+            'price': price,
+            'commission': commission,
+            'timestamp': event.get_timestamp() or datetime.datetime.now()
+        })
         
         # Update position
         self._update_position(symbol, direction, quantity, price)
@@ -41,11 +74,22 @@ class PortfolioManager:
         # Update cash
         self._update_cash(direction, quantity, price, commission)
         
+        # Add commission to total
+        self.total_commission += commission
+        
         # Record fill
         self.fill_history.append(event)
         
         # Update timestamp
         self.last_update_time = event.get_timestamp() or datetime.datetime.now()
+        
+        # Update equity history
+        self._update_equity_history()
+        
+        # Log the updated state
+        position_value = self.get_position_value()
+        logger.debug(f"Fill processed: {symbol} {direction} {quantity} @ {price:.2f}, " +
+                   f"Cash: {self.cash:.2f}, Position Value: {position_value:.2f}")
 
     def _update_position(self, symbol, direction, quantity, price):
         """Update or create position based on fill."""
@@ -53,22 +97,20 @@ class PortfolioManager:
         if symbol not in self.positions:
             self.positions[symbol] = Position(symbol)
 
-        # Update position quantity and cost basis
+        # Get the position
         position = self.positions[symbol]
 
-        # For buys, add to position (positive quantity)
-        # For sells, subtract from position (potentially creating negative quantity)
+        # Update position based on direction
         if direction == 'BUY':
             position.add_quantity(quantity, price)
         elif direction == 'SELL':
-            # If position doesn't exist or is zero, this will create a short position
-            if position.quantity == 0:
-                position.quantity = -quantity
-                position.cost_basis = price
+            # For short selling (when selling without an existing position)
+            if position.quantity <= 0:
+                # Use negative quantity for shorts
+                position.add_quantity(-quantity, price)
             else:
-                position.reduce_quantity(quantity, price)        
-    
- 
+                # For long positions, reduce quantity
+                position.reduce_quantity(quantity, price)
     
     def _update_cash(self, direction, quantity, price, commission):
         """Update cash balance based on fill."""
@@ -81,13 +123,22 @@ class PortfolioManager:
         elif direction == 'SELL':
             self.cash += trade_value - commission
     
+    def _update_equity_history(self):
+        """Update the equity history."""
+        equity = self.get_equity()
+        position_value = self.get_position_value()
+        
+        self.equity_history.append({
+            'timestamp': self.last_update_time,
+            'cash': self.cash,
+            'position_value': position_value,
+            'equity': equity
+        })
+    
     def get_equity(self, market_prices=None):
         """Calculate total portfolio equity."""
         # Cash plus position values
-        position_value = sum(position.market_value(
-            market_prices.get(position.symbol) if market_prices else None
-        ) for position in self.positions.values())
-        
+        position_value = self.get_position_value(market_prices)
         return self.cash + position_value
     
     def get_position(self, symbol):
@@ -106,18 +157,59 @@ class PortfolioManager:
     
     def get_portfolio_summary(self, market_prices=None):
         """Get summary of portfolio state."""
+        # Calculate total realized and unrealized P&L
+        realized_pnl = sum(position.realized_pnl for position in self.positions.values())
+        unrealized_pnl = sum(
+            position.unrealized_pnl(market_prices.get(position.symbol) if market_prices else None)
+            for position in self.positions.values()
+        )
+        
         return {
             'cash': self.cash,
             'position_value': self.get_position_value(market_prices),
             'equity': self.get_equity(market_prices),
+            'realized_pnl': realized_pnl,
+            'unrealized_pnl': unrealized_pnl,
+            'total_pnl': realized_pnl + unrealized_pnl,
+            'total_commission': self.total_commission,
             'positions': len(self.positions),
             'fills': len(self.fill_history),
             'last_update': self.last_update_time
         }
+    
+    def get_position_details(self, market_prices=None):
+        """Get detailed position information."""
+        details = []
+        
+        for symbol, position in self.positions.items():
+            current_price = market_prices.get(symbol) if market_prices else position.cost_basis
+            
+            details.append({
+                'symbol': symbol,
+                'quantity': position.quantity,
+                'cost_basis': position.cost_basis,
+                'market_price': current_price,
+                'market_value': position.market_value(current_price),
+                'realized_pnl': position.realized_pnl,
+                'unrealized_pnl': position.unrealized_pnl(current_price),
+                'total_pnl': position.total_pnl(current_price)
+            })
+            
+        return details
     
     def reset(self):
         """Reset portfolio to initial state."""
         self.cash = self.initial_cash
         self.positions = {}
         self.fill_history = []
+        self.transactions = []
+        self.total_commission = 0.0
         self.last_update_time = datetime.datetime.now()
+        
+        # Reset equity history
+        self.equity_history = [{
+            'timestamp': datetime.datetime.now(),
+            'cash': self.initial_cash,
+            'position_value': 0.0,
+            'equity': self.initial_cash
+        }]

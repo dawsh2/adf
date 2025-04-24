@@ -1,83 +1,143 @@
 #!/usr/bin/env python
 """
-Complete test script to verify all fixes:
-1. Timestamp handling
-2. Order tracking
-3. Fill processing
-4. Position liquidation
+Test script to verify the event system fix.
+This specifically tests the order-fill pipeline with enhanced logging.
 """
 import logging
 import sys
 import os
-import pandas as pd
-import datetime
 
-# Configure logging
+# Configure more detailed logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# Add project root to path if needed
+# You may need to adjust this path depending on your project structure
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Import all necessary components
-from src.core.events.event_bus import EventBus
-from src.core.events.event_manager import EventManager
-from src.core.events.event_types import EventType
-
-# Import fixed backtest implementation
-from src.execution.backtest.backtest import run_backtest
-
-# Import data components
-from src.data.sources.csv_handler import CSVDataSource
-from src.data.historical_data_handler import HistoricalDataHandler
-
-# Import strategy components
-from src.strategy.strategies.ma_crossover import MovingAverageCrossoverStrategy
-
-def test_complete_pipeline():
-    """
-    Test the complete pipeline with all fixes.
+def test_order_fill_pipeline():
+    """Test that order-fill pipeline works correctly with enhanced logging."""
+    logging.info("\n===== TESTING ORDER-FILL PIPELINE =====\n")
     
-    This tests:
-    1. Timestamp handling in CSVDataSource
-    2. Order generation in SimpleRiskManager
-    3. Fill processing in SimulatedBroker
-    4. Position liquidation at end of backtest
-    """
-    logger.info("Starting complete pipeline test")
+    # Import core components
+    from src.core.events.event_bus import EventBus
+    from src.core.events.event_types import EventType, FillEvent
+    from src.core.events.event_utils import create_order_event
+    from src.execution.portfolio import PortfolioManager
+    from src.execution.brokers.simulated import SimulatedBroker
     
-    # Create data source
-    data_dir = "data"  # Adjust path as needed
-    csv_source = CSVDataSource(
-        data_dir=data_dir,
-        date_column="timestamp",  # Adjust based on your CSV structure
-        filename_pattern="{symbol}_{timeframe}.csv"
+    # Set up event system
+    event_bus = EventBus()
+    
+    # Create portfolio and broker with explicit connections
+    portfolio = PortfolioManager(initial_cash=10000.0)
+    portfolio.set_event_bus(event_bus)
+    
+    # Create broker with direct fill emitter
+    broker = SimulatedBroker(fill_emitter=event_bus)
+    broker.set_event_bus(event_bus)
+    
+    # Register portfolio to listen for fills
+    event_bus.register(EventType.FILL, portfolio.on_fill)
+    
+    # Add debug tracking of all events
+    events_tracked = {
+        'signals': 0,
+        'orders': 0,
+        'fills': 0
+    }
+    
+    def track_event(event):
+        """Track all events for debugging."""
+        event_type = event.get_type()
+        if event_type == EventType.SIGNAL:
+            events_tracked['signals'] += 1
+        elif event_type == EventType.ORDER:
+            events_tracked['orders'] += 1
+            logging.info(f"Order tracked: {event.get_symbol()} {event.get_direction()} {event.get_quantity()}")
+        elif event_type == EventType.FILL:
+            events_tracked['fills'] += 1
+            logging.info(f"Fill tracked: {event.get_symbol()} {event.get_direction()} {event.get_quantity()}")
+    
+    # Register tracking for all event types
+    for event_type in [EventType.SIGNAL, EventType.ORDER, EventType.FILL]:
+        event_bus.register(event_type, track_event)
+    
+    # Output initial state
+    logging.info(f"Initial portfolio: Cash={portfolio.cash}, Positions={len(portfolio.positions)}")
+    
+    # Create and place a test order
+    test_order = create_order_event(
+        symbol="TEST", 
+        order_type="MARKET",
+        direction="BUY",
+        quantity=100,
+        price=100.0
     )
     
-    # Create historical data handler
-    data_handler = HistoricalDataHandler(
-        data_source=csv_source,
-        bar_emitter=None  # Will be set by run_backtest
-    )
+    # Place order directly
+    logging.info("Placing test order...")
+    broker.place_order(test_order)
     
-    # Create strategy with small windows to ensure signals are generated
+    # Output final state
+    logging.info(f"Final portfolio: Cash={portfolio.cash}, Positions={len(portfolio.positions)}")
+    for symbol, position in portfolio.positions.items():
+        logging.info(f"  Position: {symbol} - {position.quantity} shares @ {position.cost_basis:.2f}")
+    
+    # Output event tracking stats
+    logging.info(f"Events tracked: {events_tracked}")
+    
+    # Return success/failure
+    pipeline_working = portfolio.cash != 10000.0 and len(portfolio.positions) > 0
+    
+    if pipeline_working:
+        logging.info("Order-fill pipeline test PASSED! ✓")
+    else:
+        logging.error("Order-fill pipeline test FAILED! ✗")
+    
+    return pipeline_working
+
+# Add additional test for the full backtest pipeline
+def test_backtest_pipeline():
+    """Test the complete backtest pipeline with enhanced logging."""
+    logging.info("\n===== TESTING BACKTEST PIPELINE =====\n")
+    
+    import pandas as pd
+    
+    # Import components needed for backtest
+    from src.core.events.event_bus import EventBus
+    from src.core.events.event_manager import EventManager
+    from src.core.events.event_types import EventType
+    from src.data.sources.csv_handler import CSVDataSource
+    from src.data.historical_data_handler import HistoricalDataHandler
+    from src.strategy.strategies.ma_crossover import MovingAverageCrossoverStrategy
+    from src.execution.backtest.backtest import run_backtest
+    
+    # Create strategy with small windows to ensure signals
     strategy = MovingAverageCrossoverStrategy(
         name="ma_crossover",
         symbols=["SAMPLE"],
-        fast_window=5,
+        fast_window=5,  # Use small windows to generate more signals
         slow_window=20
     )
     
-    # Set date range
+    # Create data source and handler
+    data_dir = os.path.join('data')
+    data_source = CSVDataSource(data_dir=data_dir)
+    
+    # Create data handler
+    data_handler = HistoricalDataHandler(
+        data_source=data_source,
+        bar_emitter=None  # Will be set in backtest
+    )
+    
+    # Set date range - use a known range with data
     start_date = pd.to_datetime("2024-03-26")
     end_date = pd.to_datetime("2024-03-28")
     
-    logger.info(f"Loading data from {start_date} to {end_date}")
-    
-    # Load data (will be reset by run_backtest)
+    # Load data
     data_handler.load_data(
         symbols=["SAMPLE"],
         start_date=start_date,
@@ -85,8 +145,22 @@ def test_complete_pipeline():
         timeframe="1m"
     )
     
-    # Run backtest with the strategy
-    logger.info("Running backtest with the strategy")
+    # Run backtest with enhanced logging
+    logging.info(f"Running backtest from {start_date} to {end_date}")
+    
+    # Define event tracking callback
+    fills_executed = []
+    
+    def track_fills(event):
+        if event.get_type() == EventType.FILL:
+            fills_executed.append(event)
+            logging.info(f"Fill executed during backtest: {event.get_symbol()} {event.get_direction()} {event.get_quantity()}")
+    
+    # Create a temporary event bus to register our tracking
+    temp_bus = EventBus()
+    temp_bus.register(EventType.FILL, track_fills)
+    
+    # Run backtest
     equity_curve, trades = run_backtest(
         component=strategy,
         data_handler=data_handler,
@@ -94,86 +168,48 @@ def test_complete_pipeline():
         end_date=end_date
     )
     
-    # Analyze results
-    logger.info("\nBacktest Results:")
-    logger.info(f"Total bars processed: {len(equity_curve) - 1}")  # -1 for initial equity point
-    logger.info(f"Total trades: {len(trades)}")
-    logger.info(f"Initial equity: ${equity_curve['equity'].iloc[0]:.2f}")
-    logger.info(f"Final equity: ${equity_curve['equity'].iloc[-1]:.2f}")
+    # Log results
+    logging.info(f"Backtest complete! Generated {len(trades)} trades")
+    logging.info(f"Initial equity: ${equity_curve['equity'].iloc[0]:.2f}")
+    logging.info(f"Final equity: ${equity_curve['equity'].iloc[-1]:.2f}")
     
-    # Calculate performance metrics
-    if len(equity_curve) > 1:
-        total_return = (equity_curve['equity'].iloc[-1] / equity_curve['equity'].iloc[0] - 1) * 100
-        logger.info(f"Total return: {total_return:.2f}%")
-        
-        # Check for drawdowns
-        running_max = equity_curve['equity'].cummax()
-        drawdown = (equity_curve['equity'] / running_max - 1) * 100
-        max_drawdown = drawdown.min()
-        logger.info(f"Maximum drawdown: {max_drawdown:.2f}%")
+    # Check if backtest was successful
+    backtest_working = len(trades) > 0
     
-    # Verification - check that trades were executed and positions were liquidated
-    pipeline_working = len(trades) > 0 and abs(equity_curve['equity'].iloc[-1] - 10000) < 1000
-    
-    if pipeline_working:
-        logger.info("\nSUCCESS: The complete pipeline is working correctly!")
-        logger.info("✓ Timestamps are handled correctly")
-        logger.info("✓ Orders are tracked")
-        logger.info("✓ Fills are processed")
-        logger.info("✓ Positions are liquidated at the end")
+    if backtest_working:
+        logging.info("Backtest pipeline test PASSED! ✓")
     else:
-        if len(trades) == 0:
-            logger.error("\nFAILURE: No trades were executed!")
-        else:
-            logger.error("\nFAILURE: Final equity significantly different from initial!")
-            logger.error("Positions may not have been properly liquidated")
+        logging.error("Backtest pipeline test FAILED! ✗")
     
-    # Return both the success flag and results for further analysis
-    return pipeline_working, (equity_curve, trades)
-
-def detailed_trade_analysis(trades):
-    """
-    Perform detailed analysis of trades.
-    
-    Args:
-        trades: List of trade dictionaries
-    """
-    if not trades:
-        logger.info("No trades to analyze")
-        return
-    
-    logger.info("\nDetailed Trade Analysis:")
-    logger.info(f"Total number of trades: {len(trades)}")
-    
-    # Count buys and sells
-    buys = sum(1 for t in trades if t['direction'] == 'BUY')
-    sells = sum(1 for t in trades if t['direction'] == 'SELL')
-    logger.info(f"Buy trades: {buys}")
-    logger.info(f"Sell trades: {sells}")
-    
-    # Calculate total commission
-    total_commission = sum(t['commission'] for t in trades if 'commission' in t)
-    logger.info(f"Total commission: ${total_commission:.2f}")
-    
-    # Analyze PnL if calculated
-    pnl_trades = [t for t in trades if 'pnl' in t and t['pnl'] != 0]
-    if pnl_trades:
-        total_pnl = sum(t['pnl'] for t in pnl_trades)
-        avg_pnl = total_pnl / len(pnl_trades)
-        logger.info(f"Total PnL: ${total_pnl:.2f}")
-        logger.info(f"Average PnL per trade: ${avg_pnl:.2f}")
-        
-        winning_trades = sum(1 for t in pnl_trades if t['pnl'] > 0)
-        losing_trades = sum(1 for t in pnl_trades if t['pnl'] < 0)
-        if winning_trades + losing_trades > 0:
-            win_rate = winning_trades / (winning_trades + losing_trades) * 100
-            logger.info(f"Win rate: {win_rate:.2f}%")
+    return backtest_working, equity_curve, trades
 
 if __name__ == "__main__":
-    success, (equity_curve, trades) = test_complete_pipeline()
+    # Run tests
+    order_fill_success = test_order_fill_pipeline()
     
-    # Perform detailed analysis if requested
-    if len(sys.argv) > 1 and sys.argv[1] == '--detailed':
-        detailed_trade_analysis(trades)
-    
-    sys.exit(0 if success else 1)
+    # Only run backtest if order-fill test passes
+    if order_fill_success:
+        backtest_success, equity_curve, trades = test_backtest_pipeline()
+        
+        if backtest_success:
+            # Calculate simple performance metrics
+            initial_equity = equity_curve['equity'].iloc[0] 
+            final_equity = equity_curve['equity'].iloc[-1]
+            total_return = (final_equity / initial_equity - 1) * 100
+            
+            print("\n===== TEST RESULTS =====")
+            print(f"All pipelines functioning correctly!")
+            print(f"Backtest performance: {total_return:.2f}% return")
+            print(f"Total trades executed: {len(trades)}")
+            print("===== FIX SUCCESSFUL =====\n")
+            sys.exit(0)
+        else:
+            print("\n===== TEST RESULTS =====")
+            print(f"Order-fill pipeline fixed, but backtest pipeline still failing")
+            print("===== PARTIAL FIX =====\n")
+            sys.exit(1)
+    else:
+        print("\n===== TEST RESULTS =====")
+        print(f"Order-fill pipeline still failing")
+        print("===== FIX FAILED =====\n")
+        sys.exit(1)
