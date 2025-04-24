@@ -1,25 +1,24 @@
-# src/execution/backtest/backtest.py
+"""
+Complete fixed backtest implementation with proper order tracking and position liquidation.
+"""
 import pandas as pd
 import numpy as np
 import datetime
+import logging
 
-# Add these imports
 from src.core.events.event_bus import EventBus
 from src.core.events.event_manager import EventManager
 from src.core.events.event_types import EventType, BarEvent, SignalEvent, OrderEvent, FillEvent
+from src.core.events.event_utils import create_order_event, create_fill_event
 from src.execution.portfolio import PortfolioManager
 from src.execution.brokers.simulated import SimulatedBroker
 from src.strategy.risk.risk_manager import SimpleRiskManager
 
-import logging
 logger = logging.getLogger(__name__)
 
-# src/execution/backtest/backtest.py
-
-# src/execution/backtest/backtest.py - replace run_backtest function
 def run_backtest(component, data_handler, start_date=None, end_date=None, timestamp_translator=None, **kwargs):
     """
-    Enhanced version of run_backtest that properly handles events and timestamps.
+    Enhanced version of run_backtest that properly handles events, timestamps, and position liquidation.
     
     Args:
         component: Strategy component to test
@@ -35,13 +34,6 @@ def run_backtest(component, data_handler, start_date=None, end_date=None, timest
     import logging
     import pandas as pd
     logger = logging.getLogger(__name__)
-    
-    from src.core.events.event_bus import EventBus
-    from src.core.events.event_manager import EventManager
-    from src.core.events.event_types import EventType
-    from src.execution.portfolio import PortfolioManager
-    from src.execution.brokers.simulated import SimulatedBroker
-    from src.strategy.risk.risk_manager import SimpleRiskManager
     
     # Import datetime utilities if available
     try:
@@ -63,42 +55,29 @@ def run_backtest(component, data_handler, start_date=None, end_date=None, timest
     event_bus = EventBus()
     event_manager = EventManager(event_bus)
     
-    # Set event bus for component
-    if hasattr(component, 'set_event_bus'):
-        component.set_event_bus(event_bus)
-    
     # Create portfolio
     portfolio = PortfolioManager(initial_cash=10000.0)
     portfolio.set_event_bus(event_bus)
     
-    # Create broker - make sure it emits fills directly
+    # Create broker with explicit fill emitter
     broker = SimulatedBroker(fill_emitter=event_bus)
-    broker.set_event_bus(event_bus)
     
-    # Create risk manager
-    risk_manager = SimpleRiskManager(portfolio)
-    risk_manager.set_event_bus(event_bus)
+    # Create risk manager - explicitly set broker
+    risk_manager = SimpleRiskManager(portfolio, event_bus)
+    risk_manager.broker = broker  # Direct connection to broker
     
-    # Register components with event manager
-    event_manager.register_component('strategy', component, [EventType.BAR])
-    event_manager.register_component('risk_manager', risk_manager, [EventType.SIGNAL])
-    event_manager.register_component('broker', broker, [EventType.ORDER])
-    event_manager.register_component('portfolio', portfolio, [EventType.FILL])
+    # Set event bus for component
+    if hasattr(component, 'set_event_bus'):
+        component.set_event_bus(event_bus)
     
-    # Reset components
-    component.reset()
-    risk_manager.reset()
-    portfolio.reset()
-    data_handler.reset()
-    
-    # Add logging to track event flow
+    # Track events for analysis
     event_counts = {
         'bars': 0,
         'signals': 0,
         'orders': 0,
         'fills': 0
     }
-    trades = []  # Track trades for analysis
+    trades = []
     
     def track_event(event):
         """Track events for analysis and debugging."""
@@ -107,13 +86,15 @@ def run_backtest(component, data_handler, start_date=None, end_date=None, timest
             event_counts['bars'] += 1
         elif event_type == EventType.SIGNAL:
             event_counts['signals'] += 1
+            # Debug log signal
             logger.debug(f"Signal generated: {event.get_symbol()} {event.get_signal_value()}")
         elif event_type == EventType.ORDER:
             event_counts['orders'] += 1
+            # Debug log order
             logger.debug(f"Order generated: {event.get_symbol()} {event.get_direction()} {event.get_quantity()} @ {event.get_price()}")
         elif event_type == EventType.FILL:
             event_counts['fills'] += 1
-            # Track fill details for analysis
+            # Track trade for analysis
             if hasattr(event, 'get_symbol') and hasattr(event, 'get_direction'):
                 trades.append({
                     'timestamp': event.get_timestamp(),
@@ -126,13 +107,25 @@ def run_backtest(component, data_handler, start_date=None, end_date=None, timest
                 })
                 logger.debug(f"Fill executed: {event.get_symbol()} {event.get_direction()} {event.get_quantity()} @ {event.get_price()}")
     
+    # Register handlers for components
+    event_manager.register_component('strategy', component, [EventType.BAR])
+    event_manager.register_component('risk_manager', risk_manager, [EventType.SIGNAL])
+    event_manager.register_component('broker', broker, [EventType.ORDER])
+    event_manager.register_component('portfolio', portfolio, [EventType.FILL])
+    
     # Register tracking for all event types
     for event_type in [EventType.BAR, EventType.SIGNAL, EventType.ORDER, EventType.FILL]:
         event_bus.register(event_type, track_event)
     
+    # Reset components
+    component.reset()
+    risk_manager.reset()
+    portfolio.reset()
+    data_handler.reset()
+    
     # Track equity and timestamps
     equity_values = [portfolio.cash]
-    timestamps = [pd.Timestamp.now()]  # Use pd.Timestamp for consistency
+    timestamps = [pd.Timestamp.now()]
     
     # Get symbols from component
     symbols = component.symbols if hasattr(component, 'symbols') else []
@@ -140,6 +133,7 @@ def run_backtest(component, data_handler, start_date=None, end_date=None, timest
     # Run backtest
     logger.info(f"Starting fixed backtest with {len(symbols)} symbols")
     bars_processed = 0
+    last_bar_timestamp = None  # To track last bar timestamp for position liquidation
     
     # Process each symbol
     for symbol in symbols:
@@ -155,59 +149,105 @@ def run_backtest(component, data_handler, start_date=None, end_date=None, timest
             
             # Get and possibly translate timestamp
             bar_timestamp = bar.get_timestamp()
-            original_timestamp = bar_timestamp
+            last_bar_timestamp = bar_timestamp  # Track for position liquidation
             
             # Apply timestamp translation if provided
             if timestamp_translator and callable(timestamp_translator):
                 try:
                     bar_timestamp = timestamp_translator(bar_timestamp)
-                    # Log some translations for debugging
-                    if bars_processed <= 3 or bars_processed % 100 == 0:
-                        logger.debug(f"Translated timestamp: {original_timestamp} -> {bar_timestamp}")
                 except Exception as e:
                     logger.error(f"Error translating timestamp: {e}")
             
-            # Make timestamps comparable by removing timezone info if necessary
+            # Apply date range filtering
             if start_date is not None:
-                # Make date comparison more robust
                 try:
-                    # Try the direct comparison first
-                    skip_bar = bar_timestamp < start_date
-                except TypeError:
-                    # Handle timezone differences by converting to naive datetimes
-                    bar_ts_naive = bar_timestamp.replace(tzinfo=None) if hasattr(bar_timestamp, 'tzinfo') else bar_timestamp
-                    start_naive = start_date.replace(tzinfo=None) if hasattr(start_date, 'tzinfo') else start_date
-                    skip_bar = bar_ts_naive < start_naive
-                
-                if skip_bar:
-                    continue
+                    # Handle timezone differences
+                    if hasattr(bar_timestamp, 'tzinfo') and bar_timestamp.tzinfo is not None:
+                        if hasattr(start_date, 'tzinfo') and start_date.tzinfo is None:
+                            start_date = start_date.replace(tzinfo=bar_timestamp.tzinfo)
+                    elif hasattr(start_date, 'tzinfo') and start_date.tzinfo is not None:
+                        bar_timestamp = bar_timestamp.replace(tzinfo=start_date.tzinfo)
+                        
+                    if bar_timestamp < start_date:
+                        continue
+                except TypeError as e:
+                    logger.error(f"Error comparing timestamps: {e}")
+                    # Try naive comparison
+                    if bar_timestamp.replace(tzinfo=None) < start_date.replace(tzinfo=None):
+                        continue
             
             if end_date is not None:
-                # Make date comparison more robust
                 try:
-                    # Try the direct comparison first
-                    break_loop = bar_timestamp > end_date
-                except TypeError:
-                    # Handle timezone differences by converting to naive datetimes
-                    bar_ts_naive = bar_timestamp.replace(tzinfo=None) if hasattr(bar_timestamp, 'tzinfo') else bar_timestamp
-                    end_naive = end_date.replace(tzinfo=None) if hasattr(end_date, 'tzinfo') else end_date
-                    break_loop = bar_ts_naive > end_naive
-                
-                if break_loop:
-                    break
+                    # Handle timezone differences
+                    if hasattr(bar_timestamp, 'tzinfo') and bar_timestamp.tzinfo is not None:
+                        if hasattr(end_date, 'tzinfo') and end_date.tzinfo is None:
+                            end_date = end_date.replace(tzinfo=bar_timestamp.tzinfo)
+                    elif hasattr(end_date, 'tzinfo') and end_date.tzinfo is not None:
+                        bar_timestamp = bar_timestamp.replace(tzinfo=end_date.tzinfo)
+                    
+                    if bar_timestamp > end_date:
+                        break
+                except TypeError as e:
+                    logger.error(f"Error comparing timestamps: {e}")
+                    # Try naive comparison
+                    if bar_timestamp.replace(tzinfo=None) > end_date.replace(tzinfo=None):
+                        break
             
-            # Track what we're processing
-            if bars_processed <= 3 or bars_processed % 100 == 0:
-                logger.debug(f"Processing bar {bars_processed}: {symbol} @ {bar_timestamp}")
+            # Update market data in broker to ensure correct execution prices
+            if hasattr(broker, 'update_market_data'):
+                market_data = {
+                    'price': bar.get_close(),
+                    'timestamp': bar_timestamp
+                }
+                broker.update_market_data(symbol, market_data)
             
-            # Emit bar event directly
+            # Emit bar event
             event_bus.emit(bar)
             
-            # Track timestamp and equity
+            # Track equity after each bar
+            current_equity = portfolio.get_equity()
+            equity_values.append(current_equity)
             timestamps.append(bar_timestamp)
-            equity_values.append(portfolio.get_equity())
     
-    # Create DataFrame with timestamp and equity columns
+    # Liquidate all positions at the end of the backtest
+    if portfolio.positions:
+        logger.info("Liquidating all positions at the end of the backtest")
+        
+        for symbol, position in list(portfolio.positions.items()):
+            # Skip if no position
+            if position.quantity == 0:
+                continue
+                
+            # Get last price for the symbol
+            last_price = broker.get_market_price(symbol)
+            
+            # Determine direction for liquidation
+            direction = "SELL" if position.quantity > 0 else "BUY"
+            quantity = abs(position.quantity)
+            
+            # Create liquidation order
+            liquidation_order = create_order_event(
+                symbol=symbol,
+                order_type="MARKET",
+                direction=direction,
+                quantity=quantity,
+                price=last_price,
+                timestamp=last_bar_timestamp
+            )
+            
+            # Process liquidation order
+            logger.info(f"Liquidating position: {symbol} {direction} {quantity} @ {last_price}")
+            broker.place_order(liquidation_order)
+            
+            # Add to order count
+            event_counts['orders'] += 1
+    
+    # Calculate final equity after liquidation
+    final_equity = portfolio.get_equity()
+    equity_values.append(final_equity)
+    timestamps.append(timestamps[-1] if timestamps else pd.Timestamp.now())
+    
+    # Create equity curve DataFrame
     equity_curve = pd.DataFrame({
         'timestamp': timestamps[:len(equity_values)],
         'equity': equity_values
@@ -236,7 +276,7 @@ def run_backtest(component, data_handler, start_date=None, end_date=None, timest
     # Log statistics
     logger.info(f"Backtest complete - Events: {event_counts}")
     logger.info(f"Final portfolio: Cash={portfolio.cash}, Positions={len(portfolio.positions)}")
-    logger.info(f"Final equity: {equity_values[-1]}")
+    logger.info(f"Final equity: {final_equity}")
     
     # Log position details
     if portfolio.positions:

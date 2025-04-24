@@ -119,7 +119,10 @@ class RiskManager(RiskManagerBase):
         return adjusted_quantity >= quantity
 
 
-class SimpleRiskManager(RiskManagerBase):
+
+
+
+class SimpleRiskManager:
     """
     Simplified risk manager that handles long and short positions.
     Only allows one position at a time (either long or short).
@@ -131,6 +134,7 @@ class SimpleRiskManager(RiskManagerBase):
         self.event_bus = event_bus
         self.fixed_size = fixed_size
         self.position_state = {}  # symbol -> position state (0=neutral, 1=long, -1=short)
+        self.broker = None  # Direct broker connection
         self.orders = []  # For tracking generated orders
     
     def set_event_bus(self, event_bus):
@@ -152,11 +156,7 @@ class SimpleRiskManager(RiskManagerBase):
             bool: True if trade is allowed, False otherwise
         """
         # In this simplified implementation, always allow trades
-        # You could add more sophisticated risk checks here
         return True
-
-
-    
     
     def on_signal(self, event):
         """Process a signal event and produce an order if appropriate."""
@@ -177,8 +177,8 @@ class SimpleRiskManager(RiskManagerBase):
         current_state = self.position_state[symbol]
 
         # Log current state and signal for debugging
-        # logger.debug(f"Processing signal for {symbol}: Current position: {current_state}, " 
-        #             f"Signal: {'BUY' if signal_value == SignalEvent.BUY else 'SELL'}")
+        logger.debug(f"Processing signal for {symbol}: Current position: {current_state}, " 
+                     f"Signal: {'BUY' if signal_value == SignalEvent.BUY else 'SELL'}")
 
         # CASE 1: BUY signal
         if signal_value == SignalEvent.BUY:
@@ -193,10 +193,11 @@ class SimpleRiskManager(RiskManagerBase):
                     price=price,
                     timestamp=timestamp
                 )
-                # Only update state AFTER order is successfully emitted
-                if self._emit_order(order):
+                # Create order and update state
+                order_success = self._emit_order(order)
+                if order_success:
                     self.position_state[symbol] = 1  # Mark as long
-                    # logger.info(f"Opening LONG position for {symbol}: {self.fixed_size} @ {price:.2f}")
+                    logger.debug(f"Opening LONG position for {symbol}: {self.fixed_size} @ {price:.2f}")
 
             # Case 1B: Currently short - close short position then go long
             elif current_state == -1:
@@ -209,10 +210,10 @@ class SimpleRiskManager(RiskManagerBase):
                     price=price,
                     timestamp=timestamp
                 )
-                # Only update state AFTER order is successfully emitted
+                # Process cover order
                 cover_success = self._emit_order(cover_order)
                 if cover_success:
-                    # logger.info(f"Closing SHORT position for {symbol}: {self.fixed_size} @ {price:.2f}")
+                    logger.debug(f"Closing SHORT position for {symbol}: {self.fixed_size} @ {price:.2f}")
 
                     # Then go long with another order
                     long_order = create_order_event(
@@ -225,13 +226,13 @@ class SimpleRiskManager(RiskManagerBase):
                     )
                     if self._emit_order(long_order):
                         self.position_state[symbol] = 1  # Mark as long
-                        # logger.info(f"Opening LONG position for {symbol}: {self.fixed_size} @ {price:.2f}")
+                        logger.debug(f"Opening LONG position for {symbol}: {self.fixed_size} @ {price:.2f}")
                     else:
                         self.position_state[symbol] = 0  # Mark as neutral if second order fails
 
             # Case 1C: Already long - do nothing
-            else:  current_state == 1
-                # logger.info(f"Ignoring BUY signal for {symbol}: already in LONG position")
+            else:  # current_state == 1
+                logger.debug(f"Ignoring BUY signal for {symbol}: already in LONG position")
 
         # CASE 2: SELL signal
         elif signal_value == SignalEvent.SELL:
@@ -246,10 +247,10 @@ class SimpleRiskManager(RiskManagerBase):
                     price=price,
                     timestamp=timestamp
                 )
-                # Only update state AFTER order is successfully emitted
+                # Process close order
                 close_success = self._emit_order(close_order)
                 if close_success:
-                    # logger.info(f"Closing LONG position for {symbol}: {self.fixed_size} @ {price:.2f}")
+                    logger.debug(f"Closing LONG position for {symbol}: {self.fixed_size} @ {price:.2f}")
 
                     # Then go short with another order
                     short_order = create_order_event(
@@ -262,7 +263,7 @@ class SimpleRiskManager(RiskManagerBase):
                     )
                     if self._emit_order(short_order):
                         self.position_state[symbol] = -1  # Mark as short
-                        # logger.info(f"Opening SHORT position for {symbol}: {self.fixed_size} @ {price:.2f}")
+                        logger.debug(f"Opening SHORT position for {symbol}: {self.fixed_size} @ {price:.2f}")
                     else:
                         self.position_state[symbol] = 0  # Mark as neutral if second order fails
 
@@ -277,19 +278,15 @@ class SimpleRiskManager(RiskManagerBase):
                     price=price,
                     timestamp=timestamp
                 )
-                self.position_state[symbol] = -1  # Mark as short if order succeeds
-                # if self._emit_order(order):
-                    # logger.info(f"Opening SHORT position for {symbol}: {self.fixed_size} @ {price:.2f}")
+                # Process order
+                order_success = self._emit_order(order)
+                if order_success:
+                    self.position_state[symbol] = -1  # Mark as short
+                    logger.debug(f"Opening SHORT position for {symbol}: {self.fixed_size} @ {price:.2f}")
 
             # Case 2C: Already short - do nothing
-            # else: current_state == -1
-                # logger.info(f"Ignoring SELL signal for {symbol}: already in SHORT position")
-
-        # After signal processing, double-check position state for consistency
-        updated_state = self.position_state[symbol]
-        # if updated_state != current_state:
-        #     logger.info(f"Position state changed for {symbol}: {current_state} -> {updated_state}")
-    
+            else:  # current_state == -1
+                logger.debug(f"Ignoring SELL signal for {symbol}: already in SHORT position")
 
     def _emit_order(self, order):
         """
@@ -299,37 +296,32 @@ class SimpleRiskManager(RiskManagerBase):
         if not order:
             return False
 
-        # Add to order list
+        # Add to order list for tracking
         self.orders.append(order)
 
-        # Initialize success flag
+        # Track success
         success = False
 
-        # Try direct broker placement first if available
-        if hasattr(self, 'broker') and self.broker:
-            try:
-                self.broker.place_order(order)
-                # logging.info(f"Order directly placed with broker: {order.get_symbol()} {order.get_direction()} {order.get_quantity()} @ {order.get_price():.2f}")
-                success = True
-            except Exception as e:
-                logging.error(f"Failed to place order with broker: {e}")
-                # Fall back to event bus
-
-        # If broker placement failed or not available, use event bus
-        if not success and self.event_bus:
-            try:
+        try:
+            # Try event bus first
+            if self.event_bus:
+                logger.debug(f"Emitting order via event bus: {order.get_symbol()} {order.get_direction()}")
                 self.event_bus.emit(order)
-                # logging.info(f"Order emitted via event bus: {order.get_symbol()} {order.get_direction()} {order.get_quantity()} @ {order.get_price():.2f}")
                 success = True
-            except Exception as e:
-                logging.error(f"Failed to emit order via event bus: {e}")
+            # Direct broker placement as backup
+            elif self.broker:
+                logger.debug(f"Placing order with broker directly: {order.get_symbol()} {order.get_direction()}")
+                self.broker.place_order(order)
+                success = True
+            else:
+                logger.warning("No event bus or broker available - order not emitted!")
+        except Exception as e:
+            logger.error(f"Failed to emit order: {e}")
+            success = False
 
         return success
-        
-
         
     def reset(self):
         """Reset the risk manager state."""
         self.position_state = {}
-        self.orders = []
-    
+        self.orders = []    

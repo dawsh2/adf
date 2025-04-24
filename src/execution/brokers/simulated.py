@@ -1,27 +1,52 @@
+"""
+Improved simulated broker with better execution handling.
+"""
 import datetime
 import random
+import logging
 from typing import Dict, Any, Optional
 
 from src.core.events.event_types import OrderEvent, FillEvent
 from src.core.events.event_utils import create_fill_event
-from src.execution.brokers.broker_base import BrokerBase
 
-class SimulatedBroker(BrokerBase):
+logger = logging.getLogger(__name__)
+
+class SimulatedBroker:
     """
     Simulated broker for backtesting.
     Executes orders with configurable slippage and delay.
     """
     
     def __init__(self, slippage_model=None, delay_model=None, fill_emitter=None):
-        super().__init__(fill_emitter)
+        """
+        Initialize the simulated broker.
+        
+        Args:
+            slippage_model: Model for price slippage (optional)
+            delay_model: Model for execution delay (optional)
+            fill_emitter: Event emitter for fill events
+        """
         self.slippage_model = slippage_model or DefaultSlippageModel()
         self.delay_model = delay_model or DefaultDelayModel()
+        self.fill_emitter = fill_emitter
+        self.event_bus = None  # Set by event manager
         self.orders = {}  # order_id -> order
         self.market_data = {}  # symbol -> price data
     
+    def set_event_bus(self, event_bus):
+        """Set the event bus."""
+        self.event_bus = event_bus
+        return self
+    
     def place_order(self, order):
-        """Simulate order execution."""
+        """
+        Simulate order execution.
+        
+        Args:
+            order: Order to execute
+        """
         if not isinstance(order, OrderEvent):
+            logger.warning(f"Ignoring non-OrderEvent: {type(order)}")
             return
         
         # Store order
@@ -34,11 +59,14 @@ class SimulatedBroker(BrokerBase):
         quantity = order.get_quantity()
         requested_price = order.get_price()
         
+        # Log for debugging
+        logger.debug(f"Processing order: {symbol} {direction} {quantity} @ {requested_price}")
+        
         # Get current market price
         market_price = self.get_market_price(symbol)
         if market_price is None:
-            # Can't execute without price
-            return
+            logger.warning(f"No market price available for {symbol}, using requested price")
+            market_price = requested_price or 100.0  # Default price if none available
         
         # Calculate execution price with slippage
         execution_price = self.slippage_model.apply_slippage(
@@ -55,6 +83,9 @@ class SimulatedBroker(BrokerBase):
             timestamp=order.get_timestamp() or datetime.datetime.now()
         )
         
+        # Log fill creation
+        logger.debug(f"Created fill: {symbol} {direction} {quantity} @ {execution_price}")
+        
         # Emit fill event
         self.emit_fill(fill)
     
@@ -67,18 +98,42 @@ class SimulatedBroker(BrokerBase):
     
     def get_market_price(self, symbol):
         """Get the current market price for a symbol."""
+        if symbol in self.market_data and 'price' in self.market_data[symbol]:
+            return self.market_data[symbol]['price']
         # In a real implementation, this would get the price from market data
-        # For simplicity, just return the last known price or a default
-        return self.market_data.get(symbol, {}).get('price', 100.0)
+        # For simplicity, just return a default
+        return 100.0
     
     def update_market_data(self, symbol, data):
         """Update market data for a symbol."""
         self.market_data[symbol] = data
     
+    def emit_fill(self, fill):
+        """
+        Emit a fill event.
+        
+        Args:
+            fill: Fill event to emit
+        """
+        # Use either direct fill emitter or event bus
+        if self.fill_emitter:
+            logger.debug(f"Emitting fill via fill_emitter: {fill.get_symbol()}")
+            if hasattr(self.fill_emitter, 'emit'):
+                self.fill_emitter.emit(fill)
+            else:
+                # Assume fill_emitter is the event bus
+                logger.debug(f"Using fill_emitter as event bus directly")
+                self.fill_emitter.emit(fill)
+        elif self.event_bus:
+            logger.debug(f"Emitting fill via event_bus: {fill.get_symbol()}")
+            self.event_bus.emit(fill)
+        else:
+            logger.warning("No fill emitter or event bus - fill not emitted!")
+    
     def _calculate_commission(self, price, quantity):
         """Calculate commission for a trade."""
-        # Simple commission model
-        return max(1.0, 0.005 * price * quantity)
+        # Simple commission model: max($1.0, 0.1% of trade value)
+        return max(1.0, 0.001 * price * quantity)
 
 
 class DefaultSlippageModel:
