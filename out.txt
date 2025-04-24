@@ -18,3 +18,23 @@ Column mapping result: {'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': '
 DEMO COMPLETE
 ================================================================================
 
+
+================================================================================
+OPTIMIZATION FRAMEWORK DEMO
+================================================================================
+
+Input columns: Index(['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume', 'trade_count',
+       'vwap'],
+      dtype='object')
+Column map: {'open': ['open', 'Open'], 'high': ['high', 'High'], 'low': ['low', 'Low'], 'close': ['close', 'Close'], 'volume': ['volume', 'Volume', 'vol', 'Vol']}
+Column mapping result: {'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close', 'Volume': 'volume'}
+Input columns: Index(['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume', 'trade_count',
+       'vwap'],
+      dtype='object')
+Column map: {'open': ['open', 'Open'], 'high': ['high', 'High'], 'low': ['low', 'Low'], 'close': ['close', 'Close'], 'volume': ['volume', 'Volume', 'vol', 'Vol']}
+Column mapping result: {'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close', 'Volume': 'volume'}
+
+================================================================================
+DEMO COMPLETE
+================================================================================
+

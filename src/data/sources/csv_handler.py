@@ -41,10 +41,11 @@ class CSVDataSource(DataSourceBase):
         }
 
 
-
     def get_data(self, symbol: str, start_date=None, end_date=None, timeframe='1d') -> pd.DataFrame:
         """Get data for a symbol within a date range."""
         filename = self._get_filename(symbol, timeframe)
+        logger.info(f"CSVDataSource: Loading file {filename}")
+
         if not os.path.exists(filename):
             logger.warning(f"File not found: {filename}")
             return pd.DataFrame()
@@ -52,24 +53,30 @@ class CSVDataSource(DataSourceBase):
         try:
             # Read CSV
             df = pd.read_csv(filename)
+            logger.info(f"CSVDataSource: Loaded {len(df)} rows")
 
             # Convert date column to datetime
             if self.date_column in df.columns:
-                # Use utc=True to avoid timezone warnings
-                df[self.date_column] = pd.to_datetime(df[self.date_column], format=self.date_format, errors='coerce', utc=True)
+                # 1. Parse timestamps
+                logger.info(f"CSVDataSource: Original timestamp sample: {df[self.date_column].iloc[0]}")
+                df[self.date_column] = pd.to_datetime(df[self.date_column])
+                logger.info(f"CSVDataSource: Parsed timestamp sample: {df[self.date_column].iloc[0]}")
 
-                # Make start_date and end_date timezone-aware if they aren't already
-                if start_date is not None and not hasattr(start_date, 'tzinfo'):
-                    start_date = pd.Timestamp(start_date, tz='UTC')
-                elif start_date is not None and start_date.tzinfo is None:
-                    start_date = start_date.replace(tzinfo=pytz.UTC)
+                # 2. CRITICAL FIX: Remove timezone info
+                df[self.date_column] = df[self.date_column].dt.tz_localize(None)
+                logger.info(f"CSVDataSource: Fixed timestamp sample: {df[self.date_column].iloc[0]}")
 
-                if end_date is not None and not hasattr(end_date, 'tzinfo'):
-                    end_date = pd.Timestamp(end_date, tz='UTC')
-                elif end_date is not None and end_date.tzinfo is None:
-                    end_date = end_date.replace(tzinfo=pytz.UTC)
+                # Rest of your code...
 
-                # Filter by date range
+
+
+                # 3. Ensure filter dates are also timezone-naive
+                if start_date is not None and hasattr(start_date, 'tzinfo') and start_date.tzinfo is not None:
+                    start_date = start_date.replace(tzinfo=None)
+                if end_date is not None and hasattr(end_date, 'tzinfo') and end_date.tzinfo is not None:
+                    end_date = end_date.replace(tzinfo=None)
+
+                # 4. Now all timestamps are naive, comparison will work properly
                 if start_date:
                     df = df[df[self.date_column] >= start_date]
                 if end_date:
@@ -87,6 +94,9 @@ class CSVDataSource(DataSourceBase):
         except Exception as e:
             logger.error(f"Error reading CSV file {filename}: {e}")
             return pd.DataFrame()        
+
+ 
+ 
 
 
 

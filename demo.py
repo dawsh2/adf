@@ -45,6 +45,41 @@ from src.models.filters.regime.detector_factory import RegimeDetectorFactory
 
 
 
+def debug_csv_loading(file_path='data/SAMPLE_1m.csv'):
+    """Debug CSV timestamp loading issues with direct fix implementation."""
+    import pandas as pd
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    logger.info(f"Testing CSV loading with {file_path}")
+    
+    # Load the raw CSV
+    df = pd.read_csv(file_path)
+    logger.info(f"Raw timestamp column: {df['timestamp'].iloc[:3].tolist()}")
+    
+    # Parse timestamps with standard pandas
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    logger.info(f"After parsing: {df['timestamp'].iloc[:3].tolist()}")
+    
+    # Apply our fix - remove timezone info
+    df['timestamp_fixed'] = df['timestamp'].dt.tz_localize(None)
+    logger.info(f"After removing timezone: {df['timestamp_fixed'].iloc[:3].tolist()}")
+    
+    # Try comparison with naive dates
+    start_date = pd.to_datetime('2024-03-26')
+    logger.info(f"Comparison date: {start_date}")
+    
+    # Check if comparison now works
+    try:
+        filtered = df[df['timestamp_fixed'] >= start_date]
+        logger.info(f"Comparison successful! Found {len(filtered)} matching rows")
+        if len(filtered) > 0:
+            logger.info(f"First few filtered timestamps: {filtered['timestamp_fixed'].iloc[:3].tolist()}")
+    except Exception as e:
+        logger.error(f"Comparison still failed: {e}")
+    
+    return df
+
 def debug_order_duplication():
     """Debug the double order issue."""
     logger.info("\n===== DEBUGGING ORDER DUPLICATION =====\n")
@@ -230,7 +265,7 @@ def create_backtest_environment(symbols=['SAMPLE']):
     }
 
 
-
+# Fixed version of load_test_data function for demo.py
 def load_test_data(symbol='SAMPLE', start_date='2024-03-26', end_date='2024-04-26'):
     """Load historical data for testing."""
     # Convert string dates to datetime objects
@@ -312,43 +347,41 @@ def demo_walk_forward_optimization():
     end_date = pd.to_datetime(end_date_str)
     
     # Load data
-    data_handler, env = load_test_data(
+    data_handler_tuple = load_test_data(
         symbol='SAMPLE',
         start_date=start_date_str,
         end_date=end_date_str
     )
     
-    # Add debug logging to check if data was actually loaded
-    logger.info(f"Checking data availability in date range {start_date_str} to {end_date_str}")
+    # Extract just the data handler from the returned tuple
+    data_handler = data_handler_tuple[0]
+    env = data_handler_tuple[1]
     
-    # Test data access - reset data handler and try to get some bars
-    data_handler.reset()
-    symbol = 'SAMPLE'
-    
-    # Count available bars to verify data
-    bar_count = 0
-    sample_dates = []
-    while True:
-        bar = data_handler.get_next_bar(symbol)
-        if bar is None:
-            break
-        bar_count += 1
-        date = bar.get_timestamp()
-        if bar_count <= 5 or bar_count > (bar_count - 5):
-            sample_dates.append(date)
-    
-    if bar_count == 0:
-        logger.error(f"No data found for {symbol} in the specified date range!")
-        return None, None
-    
-    logger.info(f"Found {bar_count} bars for {symbol}")
-    if sample_dates:
-        logger.info(f"Sample dates: First 5 = {sample_dates[:5]}")
-        if len(sample_dates) > 5:
-            logger.info(f"Latest dates: {sample_dates[-5:]}")
-    
-    # Reset data handler for optimization
-    data_handler.reset()
+    # Register custom evaluator
+    def custom_eval(component, data_handler, start_date=None, end_date=None, **kwargs):
+        """Custom evaluation function that properly handles the data handler."""
+        logger.info(f"Evaluating strategy with params: {component.get_parameters()}")
+        logger.info(f"Evaluation date range: {start_date} to {end_date}")
+        
+        # Run backtest
+        from src.execution.backtest.backtest import run_backtest
+        equity_curve, trades = run_backtest(
+            component=component,
+            data_handler=data_handler,
+            start_date=start_date,
+            end_date=end_date
+        )
+        
+        # Calculate a simple return metric
+        if len(equity_curve) > 1:
+            initial = equity_curve['equity'].iloc[0]
+            final = equity_curve['equity'].iloc[-1]
+            score = (final - initial) / initial if initial > 0 else 0
+        else:
+            score = 0
+            
+        logger.info(f"Evaluation result: {score:.4f}")
+        return score
     
     # 2. Create strategy
     ma_strategy = MovingAverageCrossoverStrategy(
@@ -363,6 +396,7 @@ def demo_walk_forward_optimization():
     
     # 4. Register components
     manager.register_target("ma_strategy", ma_strategy)
+    manager.register_evaluator("custom_eval", custom_eval)
     
     # 5. Define parameter space with constraint
     param_space = {
@@ -373,59 +407,22 @@ def demo_walk_forward_optimization():
     def window_constraint(params):
         return params['fast_window'] < params['slow_window']
     
-    # 6. Register custom evaluator for simpler testing
-    def custom_evaluator(component, **kwargs):
-        """Simplified evaluation function for testing."""
-        logger.info(f"Evaluating strategy with params: {component.get_parameters()}")
-        
-        data_handler = kwargs.get('data_handler')
-        start = kwargs.get('start_date')
-        end = kwargs.get('end_date')
-        
-        if start:
-            logger.info(f"Evaluation date range: {start} to {end}")
-        
-        # Run a simple backtest
-        from src.execution.backtest.backtest import run_backtest
-        equity_curve, trades = run_backtest(
-            component=component,
-            data_handler=data_handler,
-            start_date=start,
-            end_date=end
-        )
-        
-        # Calculate a simple metric - just final equity
-        if len(equity_curve) > 0:
-            final_equity = equity_curve['equity'].iloc[-1]
-            initial_equity = equity_curve['equity'].iloc[0]
-            total_return = (final_equity / initial_equity) - 1
-            logger.info(f"Evaluation result: {total_return:.4f}")
-            return total_return
-        else:
-            logger.warning("No equity curve generated in evaluation")
-            return 0.0
-    
-    # Register the custom evaluator with the manager
-    manager.register_evaluator("custom_eval", custom_evaluator)
-    
-    # 7. Run walk-forward optimization using the registered evaluator
-    logger.info("Running walk-forward optimization...")
-    
-    # Use simplified optimization for initial testing
+    # 6. Run grid search optimization
     try:
-        # Start with a simpler optimizer first
+        logger.info("Running grid search optimization...")
+        
         grid_result = manager.optimize_component(
             target_name="ma_strategy",
-            optimizer_name="grid",  # Use grid search first
+            optimizer_name="grid",
             evaluator_name="custom_eval",
             param_space=param_space,
             constraints=[window_constraint],
-            data_handler=data_handler,
+            data_handler=data_handler,  # Pass just the data handler
             start_date=start_date,
             end_date=end_date
         )
         
-        # If grid search works, try walk-forward
+        # 7. Try walk-forward optimization
         logger.info("Grid search complete, attempting walk-forward optimization...")
         
         wf_result = manager.optimize_component(
@@ -434,7 +431,7 @@ def demo_walk_forward_optimization():
             evaluator_name="custom_eval",
             param_space=param_space,
             constraints=[window_constraint],
-            data_handler=data_handler,
+            data_handler=data_handler,  # Pass just the data handler
             start_date=start_date,
             end_date=end_date,
             windows=3,  # Use 3 windows for testing
@@ -475,18 +472,74 @@ def demo_walk_forward_optimization():
             return manager, grid_result
             
     except Exception as e:
-        logger.error(f"Error during walk-forward optimization: {e}")
+        logger.error(f"Error during optimization: {e}")
         import traceback
-        logger.error(traceback.format_exc())
-        return None, None
-
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return None, None    
 
 def demo_basic_optimization():
     """Demonstrate basic component optimization."""
     logger.info("\n===== BASIC OPTIMIZATION DEMO =====\n")
     
-    # 1. Load market data
-    data_handler, env = load_test_data(symbol='SAMPLE')
+    # Import datetime utilities - only use what's available
+    try:
+        from src.data.datetime_utils import parse_timestamp
+    except ImportError:
+        # If not available, define a simple one
+        def parse_timestamp(date_str):
+            return pd.to_datetime(date_str)
+    
+    # 1. Load market data with proper date handling
+    start_date_str = '2024-03-26'
+    end_date_str = '2024-04-26'
+    
+    # Parse dates 
+    start_date = parse_timestamp(start_date_str)
+    end_date = parse_timestamp(end_date_str)
+    
+    # Load data
+    data_handler_tuple = load_test_data(
+        symbol='SAMPLE',
+        start_date=start_date_str,
+        end_date=end_date_str
+    )
+    
+    # Extract just the data handler from the tuple
+    data_handler = data_handler_tuple[0]
+    
+    # Verify data is loaded and timestamps are valid
+    logger.info("Verifying data timestamps...")
+    data_handler.reset()
+    sample_dates = []
+    bar_count = 0
+    
+    while True:
+        bar = data_handler.get_next_bar('SAMPLE')
+        if bar is None:
+            break
+            
+        bar_count += 1
+        if bar_count <= 3 or bar_count % 100 == 0:
+            timestamp = bar.get_timestamp()
+            sample_dates.append(timestamp)
+    
+    # Reset data handler
+    data_handler.reset()
+    logger.info(f"Found {bar_count} bars with sample dates: {sample_dates[:3]}")
+    
+    # Define timestamp translator for epoch timestamps
+    def epoch_to_2024(timestamp):
+        """Translate epoch timestamps to 2024 range."""
+        if hasattr(timestamp, 'timestamp') and timestamp.timestamp() < 86400:  # Likely epoch timestamp
+            from datetime import datetime, timedelta
+            # Calculate approx days from 1970-01-01 to 2024-03-26
+            days_to_add = 19812
+            # Get seconds from epoch timestamp
+            seconds = timestamp.timestamp()
+            # Create a new date adding appropriate offset
+            corrected_date = datetime(1970, 1, 1) + timedelta(days=days_to_add) + timedelta(seconds=seconds)
+            return corrected_date
+        return timestamp
     
     # 2. Create strategies
     ma_strategy = MovingAverageCrossoverStrategy(
@@ -512,46 +565,113 @@ def demo_basic_optimization():
     def window_constraint(params):
         return params['fast_window'] < params['slow_window']
     
+    # Custom evaluation function that handles timestamp issues
+    def custom_evaluator(component, data_handler, start_date=None, end_date=None, **kwargs):
+        """Custom evaluator that properly handles timestamps."""
+        logger.info(f"Evaluating with params: {component.get_parameters()}")
+        
+        # Process timestamps
+        if isinstance(start_date, str):
+            start_date = parse_timestamp(start_date)
+        if isinstance(end_date, str):
+            end_date = parse_timestamp(end_date)
+        
+        # Run backtest with timestamp correction
+        from src.execution.backtest.backtest import run_backtest
+        
+        # Run backtest
+        equity_curve, trades = run_backtest(
+            component=component,
+            data_handler=data_handler,
+            start_date=start_date,
+            end_date=end_date,
+            timestamp_translator=epoch_to_2024
+        )
+        
+        # Calculate metrics
+        if len(equity_curve) > 1:
+            initial = equity_curve['equity'].iloc[0]
+            final = equity_curve['equity'].iloc[-1]
+            return (final - initial) / initial if initial > 0 else 0
+        return 0
+    
+    # Register custom evaluator
+    manager.register_evaluator("custom_eval", custom_evaluator)
+    
     # 6. Run optimization
     logger.info("Running grid search optimization...")
-    grid_result = manager.optimize_component(
-        target_name="ma_strategy",
-        optimizer_name="grid",
-        evaluator_name="sharpe_ratio",
-        param_space=param_space,
-        constraints=[window_constraint],
-        data_handler=data_handler,
-        start_date='2024-03-26',
-        end_date='2024-04-28'
-    )
+    try:
+        grid_result = manager.optimize_component(
+            target_name="ma_strategy",
+            optimizer_name="grid",
+            evaluator_name="custom_eval",
+            param_space=param_space,
+            constraints=[window_constraint],
+            data_handler=data_handler,
+            start_date=start_date,
+            end_date=end_date
+        )
+        
+        # 7. Display results
+        logger.info("\nGrid Search Results:")
+        logger.info(f"Best parameters: {grid_result.get('best_params')}")
+        logger.info(f"Best score: {grid_result.get('best_score')}")
+        
+        # 8. Run another optimization method
+        logger.info("\nRunning random search optimization...")
+        random_result = manager.optimize_component(
+            target_name="ma_strategy",
+            optimizer_name="random",
+            evaluator_name="custom_eval",
+            param_space=param_space,
+            constraints=[window_constraint],
+            data_handler=data_handler,
+            start_date=start_date,
+            end_date=end_date
+        )
+        
+        logger.info("\nRandom Search Results:")
+        logger.info(f"Best parameters: {random_result.get('best_params')}")
+        logger.info(f"Best score: {random_result.get('best_score')}")
+        
+        # 9. Run a simple backtest with the best parameters
+        if grid_result.get('best_params'):
+            logger.info("\nRunning backtest with best parameters...")
+            ma_strategy.set_parameters(grid_result.get('best_params'))
+            
+            equity_curve, trades = run_backtest(
+                component=ma_strategy,
+                data_handler=data_handler,
+                start_date=start_date,
+                end_date=end_date,
+                timestamp_translator=epoch_to_2024
+            )
+            
+            # Display summary metrics
+            total_return = 0
+            if len(equity_curve) > 1:
+                initial = equity_curve['equity'].iloc[0]
+                final = equity_curve['equity'].iloc[-1]
+                total_return = (final - initial) / initial * 100
+                
+            logger.info(f"Backtest results with best parameters:")
+            logger.info(f"  Total return: {total_return:.2f}%")
+            logger.info(f"  Number of trades: {len(trades)}")
+        
+        return manager, grid_result, random_result
     
-    # 7. Display results
-    logger.info("\nGrid Search Results:")
-    logger.info(f"Best parameters: {grid_result.get('best_params')}")
-    logger.info(f"Best score: {grid_result.get('best_score')}")
-    
-    # 8. Run another optimization method
-    logger.info("\nRunning random search optimization...")
-    random_result = manager.optimize_component(
-        target_name="ma_strategy",
-        optimizer_name="random",
-        evaluator_name="total_return",
-        param_space=param_space,
-        constraints=[window_constraint],
-        data_handler=data_handler,
-        start_date='2024-03-26',
-        end_date='2024-04-28'
-    )
-    
-    logger.info("\nRandom Search Results:")
-    logger.info(f"Best parameters: {random_result.get('best_params')}")
-    logger.info(f"Best score: {random_result.get('best_score')}")
-    
-    return manager, grid_result, random_result
+    except Exception as e:
+        logger.error(f"Error during optimization: {str(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return None, None, None
 
+    
 # Other demo functions would follow the same pattern
 
 if __name__ == "__main__":
+    debug_df = debug_csv_loading()
+    print("Debug Complete - Check logs")
     # Run order-fill test first to confirm basic functionality
     test_success = test_order_fill_pipeline()
     

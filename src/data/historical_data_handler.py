@@ -71,34 +71,41 @@ class HistoricalDataHandler(DataHandlerBase):
                     logger.warning(f"No data found for {symbol}")
             except Exception as e:
                 logger.error(f"Error loading data for {symbol}: {e}")
-    
+
+
     def get_next_bar(self, symbol: str) -> Optional[BarEvent]:
         """Get the next bar for a symbol."""
         # Check if we have data for this symbol
         if symbol not in self.data_frames:
             logger.warning(f"No data loaded for symbol: {symbol}")
             return None
-            
+
         df = self.data_frames[symbol]
         idx = self.current_idx[symbol]
-        
+
         # Check if we've reached the end of the data
         if idx >= len(df):
             logger.debug(f"End of data reached for {symbol}")
             return None
-            
+
         # Get the row
         row = df.iloc[idx]
         timestamp = row.name
-        
+
+        # Debug timestamp before processing
+        if idx == 0 or idx % 100 == 0:
+            logger.info(f"HistoricalDataHandler: Row timestamp before bar creation: {timestamp}, type: {type(timestamp)}")
+
         if not isinstance(timestamp, pd.Timestamp) and not isinstance(timestamp, datetime.datetime):
             try:
                 timestamp = pd.to_datetime(timestamp)
+                if idx == 0 or idx % 100 == 0:
+                    logger.info(f"HistoricalDataHandler: Converted timestamp: {timestamp}, type: {type(timestamp)}")
             except Exception as e:
                 logger.error(f"Invalid timestamp for {symbol} at index {idx}: {e}")
                 self.current_idx[symbol] = idx + 1
                 return None
-        
+
         # Create bar event
         try:
             # Extract data from row
@@ -107,7 +114,7 @@ class HistoricalDataHandler(DataHandlerBase):
             low_price = float(row['low'])
             close_price = float(row['close'])
             volume = int(row['volume'])
-            
+
             # Create bar event
             bar = create_bar_event(
                 symbol=symbol,
@@ -118,23 +125,28 @@ class HistoricalDataHandler(DataHandlerBase):
                 close_price=close_price,
                 volume=volume
             )
-            
+
+            # Debug after bar creation
+            if idx == 0 or idx % 100 == 0:
+                logger.info(f"HistoricalDataHandler: Bar timestamp after creation: {bar.get_timestamp()}, type: {type(bar.get_timestamp())}")
+
             # Store in history
             self.bars_history[symbol].append(bar)
-            
+
             # Increment index
             self.current_idx[symbol] = idx + 1
-            
+
             # Emit the bar event
             if self.bar_emitter:
                 self.bar_emitter.emit(bar)
-            
+
             return bar
         except Exception as e:
             logger.error(f"Error creating bar event for {symbol} at index {idx}: {e}")
             self.current_idx[symbol] = idx + 1
             return None
-    
+
+
     def reset(self) -> None:
         """Reset the data handler state."""
         self.current_idx = {symbol: 0 for symbol in self.data_frames}
