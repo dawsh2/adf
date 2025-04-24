@@ -446,7 +446,6 @@ if __name__ == "__main__":
     
     if not pipeline_ok:
         logging.error("Order-fill pipeline is not working correctly - fix before continuing")
-        # Continue anyway for debugging, but be aware results may be incorrect
     
     # Continue with the rest of your code
     print("\n" + "="*80)

@@ -240,16 +240,69 @@ class PerformanceCalculator(PerformanceCalculatorBase):
         Returns:
             dict: Performance metrics
         """
-        # Initialize metrics
+        # Initialize metrics dictionary
         metrics = {}
 
-        # Calculate return metrics
-        self._calculate_return_metrics(equity_curve, metrics)
+        # Extract equity values
+        if 'equity' not in equity_curve.columns:
+            return {'sharpe_ratio': 0.0, 'total_return': 0.0}
 
-        # Calculate risk metrics
-        self._calculate_risk_metrics(equity_curve, metrics)
+        equities = equity_curve['equity'].values
 
-        # We can't calculate trade metrics without trade data, so add placeholders
+        # Skip calculations if not enough data
+        if len(equities) < 2:
+            return {'sharpe_ratio': 0.0, 'total_return': 0.0}
+
+        # Calculate basic return metrics
+        initial_equity = equities[0]
+        final_equity = equities[-1]
+
+        # Total return
+        total_return = (final_equity / initial_equity) - 1.0
+        metrics['total_return'] = total_return
+
+        # Calculate returns
+        returns = []
+        for i in range(1, len(equities)):
+            ret = (equities[i] / equities[i-1]) - 1.0
+            returns.append(ret)
+
+        # Calculate metrics only if we have returns
+        if returns:
+            # Average return
+            avg_return = sum(returns) / len(returns)
+            metrics['avg_return'] = avg_return
+
+            # Volatility (annualized)
+            import numpy as np
+            volatility = np.std(returns) * np.sqrt(252)  # Assuming daily data
+            metrics['volatility'] = volatility
+
+            # Sharpe ratio (simplified)
+            risk_free_rate = 0.0  # Simplified
+            if volatility > 0:
+                sharpe_ratio = (avg_return * 252 - risk_free_rate) / volatility
+            else:
+                sharpe_ratio = 0.0
+            metrics['sharpe_ratio'] = sharpe_ratio
+
+            # Maximum drawdown
+            max_dd = 0.0
+            peak = equities[0]
+            for equity in equities:
+                if equity > peak:
+                    peak = equity
+                dd = (peak - equity) / peak
+                max_dd = max(max_dd, dd)
+            metrics['max_drawdown'] = max_dd
+        else:
+            # Default values if no returns can be calculated
+            metrics['avg_return'] = 0.0
+            metrics['volatility'] = 0.0
+            metrics['sharpe_ratio'] = 0.0
+            metrics['max_drawdown'] = 0.0
+
+        # Add placeholder trade metrics
         metrics['num_trades'] = 0
         metrics['win_rate'] = 0.0
         metrics['profit_factor'] = 0.0
@@ -258,11 +311,9 @@ class PerformanceCalculator(PerformanceCalculatorBase):
         metrics['max_win'] = 0.0
         metrics['max_loss'] = 0.0
 
-        # Calculate additional metrics
-        self._calculate_additional_metrics(metrics)
-
         return metrics
     
+
  
 
 
