@@ -20,7 +20,7 @@ from .manager import (
     create_optimization_manager
 )
 
-# Import the validation class directly from the file
+# Import the validation class from the validation package
 from .validation import OptimizationValidator
 
 # Export all components

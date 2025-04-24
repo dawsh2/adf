@@ -2,7 +2,7 @@
 Optimization Framework Demo Script
 
 This script demonstrates the core functionality of the modular optimization framework
-with both standard and regime-aware optimization.
+with both standard and regime-aware optimization, as well as validation capabilities.
 """
 
 import logging
@@ -43,10 +43,8 @@ from src.execution.backtest.backtest import run_backtest
 from src.models.optimization.manager import create_optimization_manager
 from src.models.filters.regime.detector_factory import RegimeDetectorFactory
 
-# Import optimization validator 
-from src.models.optimization import OptimizationValidator
-
-
+# Import optimization validator
+from src.models.optimization.validation import OptimizationValidator
 
 def debug_csv_loading(file_path='data/SAMPLE_1m.csv'):
     """Debug CSV timestamp loading issues with direct fix implementation."""
@@ -268,7 +266,6 @@ def create_backtest_environment(symbols=['SAMPLE']):
     }
 
 
-# Fixed version of load_test_data function for demo.py
 def load_test_data(symbol='SAMPLE', start_date='2024-03-26', end_date='2024-04-26'):
     """Load historical data for testing."""
     # Convert string dates to datetime objects
@@ -670,7 +667,113 @@ def demo_basic_optimization():
         logger.error(f"Traceback: {traceback.format_exc()}")
         return None, None, None
 
+def demo_optimization_validation():
+    """Demonstrate the optimization validation functionality."""
+    logger.info("\n===== OPTIMIZATION VALIDATION DEMO =====\n")
     
+    # 1. Set up data for validation
+    start_date_str = '2024-03-26'
+    end_date_str = '2024-03-28'  # Use a shorter period for faster validation
+    
+    # Create pandas timestamps
+    start_date = pd.to_datetime(start_date_str)
+    end_date = pd.to_datetime(end_date_str)
+    
+    # Load test data
+    data_handler_tuple = load_test_data(
+        symbol='SAMPLE',
+        start_date=start_date_str,
+        end_date=end_date_str
+    )
+    data_handler = data_handler_tuple[0]
+    
+    # 2. Create strategy to validate
+    ma_strategy = MovingAverageCrossoverStrategy(
+        name="ma_validation_strategy",
+        symbols=['SAMPLE'],
+        fast_window=10,
+        slow_window=30
+    )
+    
+    # 3. Create optimization manager
+    manager = create_optimization_manager()
+    
+    # 4. Register components
+    manager.register_target("ma_validation_strategy", ma_strategy)
+    
+    # 5. Create validation evaluator function
+    def validation_evaluator(component, data_handler, start_date=None, end_date=None, **kwargs):
+        """Evaluation function for validation."""
+        # Run backtest
+        equity_curve, trades = run_backtest(
+            component=component,
+            data_handler=data_handler,
+            start_date=start_date,
+            end_date=end_date,
+            position_size=1  # Use small size for faster execution
+        )
+        
+        # Calculate a simple return metric
+        if len(equity_curve) > 1:
+            initial = equity_curve['equity'].iloc[0]
+            final = equity_curve['equity'].iloc[-1]
+            return (final - initial) / initial if initial > 0 else 0
+        return 0
+    
+    # Register evaluator
+    manager.register_evaluator("validation_eval", validation_evaluator)
+    
+    # 6. Define a small parameter space for testing
+    param_space = {
+        'fast_window': [5, 10, 20],
+        'slow_window': [20, 30, 50]
+    }
+    
+    # 7. Create validator
+    validator = OptimizationValidator(
+        optimizer_manager=manager,
+        data_handler=data_handler,
+        start_date=start_date,
+        end_date=end_date
+    )
+    
+    # 8. Run validation
+    logger.info("Running validation with parameter sweep...")
+    try:
+        validation_result = validator.validate_component(
+            component_name="ma_validation_strategy",
+            param_space=param_space,
+            evaluator_name="validation_eval"
+        )
+        
+        # 9. Generate and display report
+        report = validator.generate_report()
+        print("\nValidation Report:")
+        print(report)
+        
+        # 10. Plot parameter landscape if matplotlib is available
+        try:
+            landscape_plot = validator.plot_parameter_landscape('fast_window', 'slow_window')
+            if landscape_plot:
+                logger.info("Parameter landscape plot generated successfully")
+                # Save plot to file if desired
+                try:
+                    landscape_plot.savefig('parameter_landscape.png')
+                    logger.info("Plot saved to parameter_landscape.png")
+                except Exception as e:
+                    logger.warning(f"Could not save plot to file: {e}")
+        except Exception as e:
+            logger.warning(f"Could not generate parameter landscape plot: {e}")
+        
+        # Return validator and results for further analysis
+        return validator, validation_result
+    
+    except Exception as e:
+        logger.error(f"Error during validation: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return None, None
+
 # Other demo functions would follow the same pattern
 
 if __name__ == "__main__":
@@ -693,6 +796,9 @@ if __name__ == "__main__":
     
     # Then run walk-forward optimization
     wf_manager, wf_result = demo_walk_forward_optimization()
+    
+    # Finally, run the validation demo
+    validator, validation_result = demo_optimization_validation()
     
     print("\n" + "="*80)
     print("DEMO COMPLETE")
