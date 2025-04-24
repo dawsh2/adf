@@ -29,7 +29,23 @@ class PerformanceAnalytics:
         
         # Annualized return (assuming 252 trading days)
         days = (equity_curve['timestamp'].iloc[-1] - equity_curve['timestamp'].iloc[0]).days
-        annualized_return = (1 + total_return) ** (252 / max(days, 1)) - 1 if days > 0 else 0
+        if days > 0:
+            if total_return <= -1:  # Complete loss of capital
+                annualized_return = -1.0  # -100%
+            else:
+                # For negative returns that aren't complete losses
+                if total_return < 0:
+                    # Alternative calculation for negative returns
+                    # Using log returns, which handles negative values properly
+                    # import numpy as np
+                    log_return = np.log(1 + total_return)
+                    annualized_log_return = log_return * (252 / days)
+                    annualized_return = np.exp(annualized_log_return) - 1
+                else:
+                    # Standard calculation for positive returns
+                    annualized_return = (1 + total_return) ** (252 / days) - 1
+        else:
+            annualized_return = 0
         
         # Sharpe ratio (assuming risk-free rate of 0)
         daily_returns = equity_curve['returns']

@@ -315,7 +315,9 @@ def determine_parameter_space(data_stats):
     if bars_count < min_data_length:
         logger.warning(f"Insufficient data ({bars_count} bars) for proper optimization. "
                       f"Minimum recommended is {min_data_length} bars.")
-    
+
+    data_stats['frequency'] = 'minute'
+        
     # Set parameter space based on data frequency and size
     if frequency == 'minute':
         # For minute data, use smaller window ranges
@@ -869,13 +871,207 @@ def process_optimization_results(opt_results, opt_manager, symbol, output_dir):
         logger.info(f"- {param}: {value}")
     logger.info(f"Best Sharpe ratio: {best_score:.4f}")
     
-    # Generate report using PerformanceAnalytics
-    report = generate_optimization_report(opt_results, symbol)
+    # Find the best result object with its detailed metrics
+    best_result_obj = None
+    for result in all_results:
+        if result.get('params') == best_params:
+            best_result_obj = result
+            break
+    
+    # Generate report
+    report = ["# Moving Average Crossover Strategy Optimization Report\n"]
+    
+    # Add summary
+    report.append("## Summary\n")
+    report.append(f"- Symbol: {symbol}")
+    report.append(f"- Total parameter combinations tested: {len(all_results)}")
+    report.append(f"- Best Sharpe ratio: {best_score:.4f}")
+    
+    # Add detailed performance metrics if available
+    if best_result_obj and 'metrics' in best_result_obj:
+        metrics = best_result_obj['metrics']
+        report.append(f"- Total Return: {metrics.get('total_return', 0):.6f}%")
+        report.append(f"- Total P&L: ${metrics.get('total_pnl', 0):.2f}")
+        report.append(f"- Max Drawdown: {metrics.get('max_drawdown', 0):.4f}%")
+        report.append(f"- Total Trades: {metrics.get('trade_count', 0)}")
+        report.append(f"- Win Rate: {metrics.get('win_rate', 0):.2f}%")
+        report.append(f"- Profit Factor: {metrics.get('profit_factor', 0):.2f}")
+    
+    # Add detailed trade statistics if available
+    if best_result_obj and 'trade_statistics' in best_result_obj:
+        stats = best_result_obj['trade_statistics']
+        report.append("\n## Trade Statistics\n")
+        report.append(f"- Total Trades: {stats.get('total_trades', 0)}")
+        report.append(f"- Winning Trades: {stats.get('win_count', 0)}")
+        report.append(f"- Losing Trades: {stats.get('loss_count', 0)}")
+        report.append(f"- Win Rate: {stats.get('win_rate', 0):.2f}%")
+        report.append(f"- Average Win: ${stats.get('avg_win', 0):.2f}")
+        report.append(f"- Average Loss: ${stats.get('avg_loss', 0):.2f}")
+        report.append(f"- Largest Win: ${stats.get('max_win', 0):.2f}")
+        report.append(f"- Largest Loss: ${stats.get('max_loss', 0):.2f}")
+        report.append(f"- Average Trade P&L: ${stats.get('average_pnl', 0):.4f}")
+    
+    report.append("")
+    
+    # Add top results table
+    report.append("## Top Results\n")
+    
+    # Table header
+    report.append("| Rank | Fast Window | Slow Window | Price | Sharpe | Return (%) | P&L ($) | Max DD (%) | Trades | Win Rate (%) |")
+    report.append("|------|------------|------------|-------|--------|------------|---------|------------|--------|--------------|")
+    
+    # Sort results by score (should already be sorted, but just to be sure)
+    sorted_results = sorted(
+        all_results, 
+        key=lambda x: x.get('score', float('-inf')), 
+        reverse=True
+    )
+    
+    # Add rows for all results
+    for i, result in enumerate(sorted_results, 1):
+        params = result.get('params', {})
+        score = result.get('score', 0)
+        metrics = result.get('metrics', {})
+        
+        # Format with high precision to show small values
+        report.append(
+            f"| {i} | " +
+            f"{params.get('fast_window', '')} | " +
+            f"{params.get('slow_window', '')} | " +
+            f"{params.get('price_key', '')} | " +
+            f"{score:.4f} | " +
+            f"{metrics.get('total_return', 0):.6f} | " +
+            f"{metrics.get('total_pnl', 0):.2f} | " +
+            f"{metrics.get('max_drawdown', 0):.6f} | " +
+            f"{metrics.get('trade_count', 0)} | " +
+            f"{metrics.get('win_rate', 0):.4f} |"
+        )
+    
+    report.append("")
+    
+    # Add detailed analysis of best result
+    report.append("## Best Parameter Set Analysis\n")
+    report.append(f"- Fast window: {best_params.get('fast_window', '')}")
+    report.append(f"- Slow window: {best_params.get('slow_window', '')}")
+    report.append(f"- Price data: {best_params.get('price_key', '')}")
+    
+    # Add additional details if available
+    if best_result_obj and 'metrics' in best_result_obj:
+        metrics = best_result_obj['metrics']
+        report.append("\n### Performance Metrics")
+        report.append(f"- Sharpe ratio: {best_score:.4f}")
+        report.append(f"- Total return: {metrics.get('total_return', 0):.6f}%")
+        report.append(f"- Total P&L: ${metrics.get('total_pnl', 0):.2f}")
+        report.append(f"- Max drawdown: {metrics.get('max_drawdown', 0):.6f}%")
+        
+        if 'sortino_ratio' in metrics:
+            report.append(f"- Sortino ratio: {metrics.get('sortino_ratio', 0):.4f}")
+        if 'calmar_ratio' in metrics:
+            report.append(f"- Calmar ratio: {metrics.get('calmar_ratio', 0):.4f}")
+    
+    report.append("")
+    
+    # Add parameter sensitivity analysis if we have enough results
+    if len(all_results) > 1:
+        report.append("## Parameter Sensitivity Analysis\n")
+        
+        # Extract all unique parameter values
+        fast_windows = sorted(list(set(r['params']['fast_window'] for r in all_results if 'params' in r)))
+        slow_windows = sorted(list(set(r['params']['slow_window'] for r in all_results if 'params' in r)))
+        
+        # Create sensitivity analysis for fast windows
+        report.append("### Fast Window Sensitivity\n")
+        report.append("| Fast Window | Avg Sharpe | Best Sharpe | Worst Sharpe | Avg Return (%) |")
+        report.append("|------------|------------|-------------|--------------|----------------|")
+        
+        for fast in fast_windows:
+            # Get all results with this fast window
+            results_with_fast = [r for r in all_results if 'params' in r and r['params'].get('fast_window') == fast]
+            
+            if results_with_fast:
+                # Calculate statistics
+                sharpes = [r.get('score', 0) for r in results_with_fast]
+                returns = [r.get('metrics', {}).get('total_return', 0) for r in results_with_fast if 'metrics' in r]
+                
+                avg_sharpe = sum(sharpes) / len(sharpes)
+                best_sharpe = max(sharpes)
+                worst_sharpe = min(sharpes)
+                avg_return = sum(returns) / len(returns) if returns else 0
+                
+                report.append(
+                    f"| {fast} | " +
+                    f"{avg_sharpe:.4f} | " +
+                    f"{best_sharpe:.4f} | " +
+                    f"{worst_sharpe:.4f} | " +
+                    f"{avg_return:.6f} |"
+                )
+        
+        # Create sensitivity analysis for slow windows
+        report.append("\n### Slow Window Sensitivity\n")
+        report.append("| Slow Window | Avg Sharpe | Best Sharpe | Worst Sharpe | Avg Return (%) |")
+        report.append("|------------|------------|-------------|--------------|----------------|")
+        
+        for slow in slow_windows:
+            # Get all results with this slow window
+            results_with_slow = [r for r in all_results if 'params' in r and r['params'].get('slow_window') == slow]
+            
+            if results_with_slow:
+                # Calculate statistics
+                sharpes = [r.get('score', 0) for r in results_with_slow]
+                returns = [r.get('metrics', {}).get('total_return', 0) for r in results_with_slow if 'metrics' in r]
+                
+                avg_sharpe = sum(sharpes) / len(sharpes)
+                best_sharpe = max(sharpes)
+                worst_sharpe = min(sharpes)
+                avg_return = sum(returns) / len(returns) if returns else 0
+                
+                report.append(
+                    f"| {slow} | " +
+                    f"{avg_sharpe:.4f} | " +
+                    f"{best_sharpe:.4f} | " +
+                    f"{worst_sharpe:.4f} | " +
+                    f"{avg_return:.6f} |"
+                )
+    
+    # Add conclusion
+    report.append("\n## Conclusion\n")
+    
+    # Add recommendations based on results
+    top_return = None
+    if sorted_results and 'metrics' in sorted_results[0]:
+        top_return = sorted_results[0]['metrics'].get('total_return', 0)
+    
+    if top_return is not None and top_return > 0:
+        # Strategy is profitable with optimal parameters
+        report.append("The Moving Average Crossover strategy shows positive results with the optimal parameters:")
+        report.append(f"- Fast window: {best_params.get('fast_window', '')}")
+        report.append(f"- Slow window: {best_params.get('slow_window', '')}")
+        report.append(f"- Price data: {best_params.get('price_key', '')}")
+        report.append("")
+        report.append("These parameters achieved the highest Sharpe ratio during testing.")
+    else:
+        # Strategy did not show profitable results
+        report.append("**Warning: No profitable parameter combinations were found for this strategy on this dataset.**")
+        report.append("")
+        report.append("Recommendations:")
+        report.append("1. Try a different strategy that may be better suited to this dataset")
+        report.append("2. Use a larger dataset with more price history")
+        report.append("3. Consider testing on a different timeframe or market condition")
+        report.append("")
+        report.append("The least unprofitable parameters are:")
+        report.append(f"- Fast window: {best_params.get('fast_window', '')}")
+        report.append(f"- Slow window: {best_params.get('slow_window', '')}")
+        report.append(f"- Price data: {best_params.get('price_key', '')}")
+    
+    # Add timestamp
+    import datetime
+    now = datetime.datetime.now()
+    report.append(f"\n*Report generated on {now.strftime('%Y-%m-%d %H:%M:%S')}*")
     
     # Save report to file
     report_path = os.path.join(output_dir, f"ma_crossover_{symbol}_optimization_report.md")
     with open(report_path, 'w') as f:
-        f.write(report)
+        f.write("\n".join(report))
     logger.info(f"Optimization report saved to {report_path}")
     
     # Create visualization
@@ -887,7 +1083,6 @@ def process_optimization_results(opt_results, opt_manager, symbol, output_dir):
         'all_results': all_results,
         'report_path': report_path
     }
-
 
 
 def visualize_results(opt_results, symbol, output_dir):
@@ -1028,3 +1223,4 @@ if __name__ == "__main__":
         initial_cash=args.cash,
         test_inverse=args.inverse  # Pass the inverse flag
     )
+
