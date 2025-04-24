@@ -1,26 +1,20 @@
-2025-04-22 11:07:07,540 - src.data.sources.csv_handler - WARNING - File not found: /Users/daws/adf/data/SPY_5m.csv
-2025-04-22 11:07:07,541 - src.data.historical_data_handler - WARNING - No data found for SPY
-2025-04-22 11:07:07,541 - __main__ - INFO - Enhanced Regime Detector initialized with: lookback=30, trend_lookback=50, volatility_lookback=20
-2025-04-22 11:07:07,541 - __main__ - INFO - Thresholds: trend=0.03, volatility=0.015, sideways=0.02
-Using data directory: /Users/daws/adf/data
 
-=== Running Regime-Specific Optimization ===
+================================================================================
+OPTIMIZATION FRAMEWORK DEMO
+================================================================================
 
-=== Running Regime-Based Optimization ===
-Traceback (most recent call last):
-  File "/Users/daws/adf/run_fopt.py", line 2518, in <module>
-    regime_results = run_regime_optimization(
-        data_dir=DATA_DIR,
-    ...<3 lines>...
-        timeframe=TIMEFRAME
-    )
-  File "/Users/daws/adf/run_fopt.py", line 2086, in run_regime_optimization
-    regime_params = regime_optimizer.optimize(
-        param_grid=param_grid,
-    ...<6 lines>...
-        min_improvement=0.1  # Require at least 10% improvement over baseline
-    )
-  File "/Users/daws/adf/run_fopt.py", line 1347, in optimize
-    symbol = data_handler.get_symbols()[0]  # Use first symbol
-             ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^
-IndexError: list index out of range
+Input columns: Index(['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume', 'trade_count',
+       'vwap'],
+      dtype='object')
+Column map: {'open': ['open', 'Open'], 'high': ['high', 'High'], 'low': ['low', 'Low'], 'close': ['close', 'Close'], 'volume': ['volume', 'Volume', 'vol', 'Vol']}
+Column mapping result: {'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close', 'Volume': 'volume'}
+Input columns: Index(['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume', 'trade_count',
+       'vwap'],
+      dtype='object')
+Column map: {'open': ['open', 'Open'], 'high': ['high', 'High'], 'low': ['low', 'Low'], 'close': ['close', 'Close'], 'volume': ['volume', 'Volume', 'vol', 'Vol']}
+Column mapping result: {'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close', 'Volume': 'volume'}
+
+================================================================================
+DEMO COMPLETE
+================================================================================
+

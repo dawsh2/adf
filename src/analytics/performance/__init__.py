@@ -1,12 +1,12 @@
-# src/analytics/performance/__init__.py
-"""
-Performance calculation module for analyzing trading results.
-"""
-
-from .base import PerformanceCalculatorBase
-from .calculator import PerformanceCalculator
+# Import existing classes
+from .calculator import PerformanceCalculator, PerformanceCalculatorBase
+# Import the new analytics class
+from .analytics import PerformanceAnalytics
 
 __all__ = [
+    'PerformanceCalculator',
     'PerformanceCalculatorBase',
-    'PerformanceCalculator'
+    'PerformanceAnalytics'
 ]
+
+#

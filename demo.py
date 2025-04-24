@@ -43,6 +43,146 @@ from src.execution.backtest.backtest import run_backtest
 from src.models.optimization.manager import create_optimization_manager
 from src.models.filters.regime.detector_factory import RegimeDetectorFactory
 
+
+
+def debug_order_duplication():
+    """Debug the double order issue."""
+    logger.info("\n===== DEBUGGING ORDER DUPLICATION =====\n")
+    
+    # Create test environment
+    env = create_backtest_environment(['TEST'])
+    event_bus = env['event_bus']
+    broker = env['broker']
+    portfolio = env['portfolio']
+    
+    # Create a tracking handler to see all events
+    events_seen = []
+    
+    def track_events(event):
+        event_type = event.get_type().name
+        if hasattr(event, 'get_symbol'):
+            symbol = event.get_symbol()
+            events_seen.append(f"{event_type}: {symbol}")
+            logger.info(f"EVENT TRACKED: {event_type} for {symbol}")
+    
+    # Register tracking handler for all event types
+    for event_type in EventType:
+        event_bus.register(event_type, track_events)
+    
+    # Test 1: Order directly through broker (bypassing events)
+    logger.info("TEST 1: Order directly through broker")
+    portfolio.reset()
+    
+    order = OrderEvent(
+        symbol='TEST',
+        order_type='MARKET',
+        direction='BUY',
+        quantity=100,
+        price=100.0
+    )
+    
+    broker.place_order(order)
+    
+    # Test 2: Order through event bus
+    logger.info("TEST 2: Order through event bus")
+    portfolio.reset()
+    events_seen.clear()
+    
+    order = OrderEvent(
+        symbol='TEST',
+        order_type='MARKET',
+        direction='BUY',
+        quantity=100,
+        price=100.0
+    )
+    
+    event_bus.emit(order)
+    
+    # Log the events that were seen
+    logger.info(f"Events tracked: {len(events_seen)}")
+    for event in events_seen:
+        logger.info(f"  {event}")
+    
+    # Test 3: Order through risk manager
+    logger.info("TEST 3: Order through risk manager")
+    portfolio.reset()
+    events_seen.clear()
+    
+    signal = SignalEvent(
+        signal_value=SignalEvent.BUY,
+        price=100.0,
+        symbol='TEST'
+    )
+    
+    event_bus.emit(signal)
+    
+    # Log the events that were seen
+    logger.info(f"Events tracked: {len(events_seen)}")
+    for event in events_seen:
+        logger.info(f"  {event}")
+    
+    return events_seen
+
+
+def debug_event_pipeline():
+    """Debug the event pipeline to see where the disconnect is happening."""
+    logger.info("\n===== DEBUGGING EVENT PIPELINE =====\n")
+    
+    # Create test environment
+    env = create_backtest_environment(['TEST'])
+    event_bus = env['event_bus']
+    event_manager = env['event_manager']
+    risk_manager = env['risk_manager']
+    
+    # Check component registrations
+    logger.info("Event bus handlers:")
+    for event_type, handlers in event_bus.handlers.items():
+        handler_names = []
+        for handler in handlers:
+            if hasattr(handler, '__self__'):
+                handler_names.append(f"{handler.__self__.__class__.__name__}.{handler.__name__}")
+            else:
+                handler_names.append(str(handler))
+        logger.info(f"  {event_type.name}: {handler_names}")
+    
+    # Check event manager components
+    logger.info("Event manager components:")
+    for name, component in event_manager.components.items():
+        logger.info(f"  {name}: {component.__class__.__name__}")
+    
+    # Examine risk manager to see if it's handling signals properly
+    logger.info("Testing risk manager signal handling:")
+    
+    # Send a test signal and see if the risk manager converts it to an order
+    signal = SignalEvent(
+        signal_value=SignalEvent.BUY,
+        price=100.0,
+        symbol='TEST'
+    )
+    
+    # Create a tracking handler to see if an order is generated
+    order_generated = []
+    
+    def track_order(event):
+        if event.get_type() == EventType.ORDER:
+            order_generated.append(event)
+            logger.info(f"ORDER GENERATED: {event.get_symbol()} {event.get_direction()} {event.get_quantity()}")
+    
+    # Register tracking handler specifically for orders
+    event_bus.register(EventType.ORDER, track_order)
+    
+    # Now emit the signal
+    event_bus.emit(signal)
+    
+    # Check if an order was generated
+    if order_generated:
+        logger.info(f"Order successfully generated from signal: {len(order_generated)} orders")
+    else:
+        logger.error("No order was generated from signal!")
+    
+    return order_generated
+
+
 def create_backtest_environment(symbols=['SAMPLE']):
     """Create a complete backtest environment with all necessary components."""
     # Create event system
@@ -156,17 +296,30 @@ def demo_walk_forward_optimization():
     """Demonstrate walk-forward optimization."""
     logger.info("\n===== WALK-FORWARD OPTIMIZATION DEMO =====\n")
     
+    # Import our analytics
+    from src.analytics.performance import PerformanceAnalytics
+    
     # 1. Load market data with explicit date handling
-    start_date = '2024-03-26'
-    end_date = '2024-04-26'
+    # Use string dates for clarity
+    start_date_str = '2024-03-26'
+    end_date_str = '2024-04-26'
+    
+    # Log the dates we're using
+    logger.info(f"Using date range: {start_date_str} to {end_date_str}")
+    
+    # Create pandas timestamps
+    start_date = pd.to_datetime(start_date_str)
+    end_date = pd.to_datetime(end_date_str)
+    
+    # Load data
     data_handler, env = load_test_data(
         symbol='SAMPLE',
-        start_date=start_date,
-        end_date=end_date
+        start_date=start_date_str,
+        end_date=end_date_str
     )
     
     # Add debug logging to check if data was actually loaded
-    logger.info(f"Checking data availability in date range {start_date} to {end_date}")
+    logger.info(f"Checking data availability in date range {start_date_str} to {end_date_str}")
     
     # Test data access - reset data handler and try to get some bars
     data_handler.reset()
@@ -174,21 +327,25 @@ def demo_walk_forward_optimization():
     
     # Count available bars to verify data
     bar_count = 0
-    all_dates = []
+    sample_dates = []
     while True:
         bar = data_handler.get_next_bar(symbol)
         if bar is None:
             break
         bar_count += 1
-        all_dates.append(bar.get_timestamp())
+        date = bar.get_timestamp()
+        if bar_count <= 5 or bar_count > (bar_count - 5):
+            sample_dates.append(date)
     
     if bar_count == 0:
         logger.error(f"No data found for {symbol} in the specified date range!")
         return None, None
     
     logger.info(f"Found {bar_count} bars for {symbol}")
-    if all_dates:
-        logger.info(f"Date range: {min(all_dates)} to {max(all_dates)}")
+    if sample_dates:
+        logger.info(f"Sample dates: First 5 = {sample_dates[:5]}")
+        if len(sample_dates) > 5:
+            logger.info(f"Latest dates: {sample_dates[-5:]}")
     
     # Reset data handler for optimization
     data_handler.reset()
@@ -216,11 +373,37 @@ def demo_walk_forward_optimization():
     def window_constraint(params):
         return params['fast_window'] < params['slow_window']
     
-    # 6. Register a custom evaluator instead of providing the function directly
+    # 6. Register custom evaluator for simpler testing
     def custom_evaluator(component, **kwargs):
-        """Simple evaluation function that returns a fixed score for testing."""
+        """Simplified evaluation function for testing."""
         logger.info(f"Evaluating strategy with params: {component.get_parameters()}")
-        return 0.5  # Return a fixed score for testing
+        
+        data_handler = kwargs.get('data_handler')
+        start = kwargs.get('start_date')
+        end = kwargs.get('end_date')
+        
+        if start:
+            logger.info(f"Evaluation date range: {start} to {end}")
+        
+        # Run a simple backtest
+        from src.execution.backtest.backtest import run_backtest
+        equity_curve, trades = run_backtest(
+            component=component,
+            data_handler=data_handler,
+            start_date=start,
+            end_date=end
+        )
+        
+        # Calculate a simple metric - just final equity
+        if len(equity_curve) > 0:
+            final_equity = equity_curve['equity'].iloc[-1]
+            initial_equity = equity_curve['equity'].iloc[0]
+            total_return = (final_equity / initial_equity) - 1
+            logger.info(f"Evaluation result: {total_return:.4f}")
+            return total_return
+        else:
+            logger.warning("No equity curve generated in evaluation")
+            return 0.0
     
     # Register the custom evaluator with the manager
     manager.register_evaluator("custom_eval", custom_evaluator)
@@ -228,44 +411,74 @@ def demo_walk_forward_optimization():
     # 7. Run walk-forward optimization using the registered evaluator
     logger.info("Running walk-forward optimization...")
     
-    # Use single window for initial testing to simplify debugging
+    # Use simplified optimization for initial testing
     try:
-        wf_result = manager.optimize_component(
+        # Start with a simpler optimizer first
+        grid_result = manager.optimize_component(
             target_name="ma_strategy",
-            optimizer_name="grid",  # Use simpler optimizer for testing
-            evaluator_name="custom_eval",  # Use our registered evaluator
+            optimizer_name="grid",  # Use grid search first
+            evaluator_name="custom_eval",
             param_space=param_space,
             constraints=[window_constraint],
             data_handler=data_handler,
-            start_date=pd.to_datetime(start_date),
-            end_date=pd.to_datetime(end_date),
-            windows=1,  # Use only 1 window for testing
+            start_date=start_date,
+            end_date=end_date
+        )
+        
+        # If grid search works, try walk-forward
+        logger.info("Grid search complete, attempting walk-forward optimization...")
+        
+        wf_result = manager.optimize_component(
+            target_name="ma_strategy",
+            optimizer_name="walk_forward",
+            evaluator_name="custom_eval",
+            param_space=param_space,
+            constraints=[window_constraint],
+            data_handler=data_handler,
+            start_date=start_date,
+            end_date=end_date,
+            windows=3,  # Use 3 windows for testing
             train_size=0.7,
             test_size=0.3
         )
         
-        # 8. Display results
-        logger.info("\nWalk-Forward Optimization Results:")
-        logger.info(f"Best parameters: {wf_result.get('best_params')}")
-        
-        # Show results for each window
-        windows = wf_result.get('window_results', [])
-        for i, window in enumerate(windows):
-            logger.info(f"\nWindow {i+1} results:")
-            logger.info(f"  Train period: {window.get('train_period')}")
-            logger.info(f"  Test period: {window.get('test_period')}")
-            logger.info(f"  Best parameters: {window.get('params')}")
-            logger.info(f"  Train score: {window.get('train_score')}")
-            logger.info(f"  Test score: {window.get('test_score')}")
-        
-        return manager, wf_result
-    
+        # 8. Display formatted results if available
+        if wf_result:
+            result_table = PerformanceAnalytics.format_walk_forward_results(wf_result)
+            print(result_table)
+            
+            # 9. Run the best strategy to demonstrate its performance
+            best_params = wf_result.get('best_params', {})
+            if best_params:
+                logger.info("\nRunning backtest with optimal parameters...")
+                
+                # Apply best parameters
+                ma_strategy.set_parameters(best_params)
+                
+                # Run backtest
+                equity_curve, trades = run_backtest(
+                    component=ma_strategy,
+                    data_handler=data_handler,
+                    start_date=start_date,
+                    end_date=end_date
+                )
+                
+                # Calculate and display metrics
+                metrics = PerformanceAnalytics.calculate_metrics(equity_curve, trades)
+                metrics_table = PerformanceAnalytics.display_metrics(metrics, 
+                                                                 title="Optimized Strategy Performance")
+                print(metrics_table)
+            
+            return manager, wf_result
+        else:
+            logger.error("Walk-forward optimization did not produce valid results")
+            return manager, grid_result
+            
     except Exception as e:
         logger.error(f"Error during walk-forward optimization: {e}")
         import traceback
         logger.error(traceback.format_exc())
         return None, None
-    
 
 
 def demo_basic_optimization():

@@ -685,6 +685,7 @@ class WalkForwardOptimizer(ComponentOptimizer):
         
         return self.best_result
 
+    # In src/models/optimization/component_optimizer.py, update the _calculate_window_boundaries method
     def _calculate_window_boundaries(self, data_handler, start_date=None, end_date=None):
         """
         Calculate window boundaries for walk-forward analysis.
@@ -697,6 +698,10 @@ class WalkForwardOptimizer(ComponentOptimizer):
         Returns:
             list: List of (train_start, train_end, test_start, test_end) tuples
         """
+        import pandas as pd
+        import logging
+        logger = logging.getLogger(__name__)
+
         symbol = data_handler.get_symbols()[0]  # Use first symbol
 
         # Convert string dates to pandas Timestamp objects if needed
@@ -709,46 +714,93 @@ class WalkForwardOptimizer(ComponentOptimizer):
         data_handler.reset()
         dates = []
 
+        # Add debug output
+        logger.info(f"Looking for data in date range: {start_date} to {end_date}")
+        logger.info(f"Symbol being analyzed: {symbol}")
+
+        # Collect bars and their dates
+        bar_count = 0
         while True:
             bar = data_handler.get_next_bar(symbol)
             if bar is None:
                 break
 
+            bar_count += 1
+
+            # Get bar timestamp and ensure it's a pandas Timestamp
             date = bar.get_timestamp()
 
-            # Make date comparisons compatible
-            date_comp = date
-            start_date_comp = start_date
-            end_date_comp = end_date
+            # Debug the first few and last few timestamps
+            if bar_count <= 3 or bar_count % 100 == 0:
+                logger.info(f"Bar {bar_count}: timestamp = {date}, type = {type(date)}")
 
-            # Handle pandas Timestamp vs datetime comparisons
-            if hasattr(pd, 'Timestamp'):
-                if isinstance(date, pd.Timestamp) and not isinstance(start_date, pd.Timestamp):
-                    date_comp = date.to_pydatetime() if hasattr(date, 'to_pydatetime') else date
+            # If it's not a pandas Timestamp, convert it
+            if not isinstance(date, pd.Timestamp):
+                try:
+                    date = pd.Timestamp(date)
+                except:
+                    logger.warning(f"Could not convert timestamp {date} to pandas Timestamp")
+                    continue
 
-                if isinstance(start_date, pd.Timestamp) and not isinstance(date, pd.Timestamp):
-                    start_date_comp = start_date.to_pydatetime() if hasattr(start_date, 'to_pydatetime') else start_date
+            # Apply date filtering if specified
+            if start_date is not None:
+                try:
+                    if date < start_date:
+                        continue
+                except TypeError:
+                    logger.warning(f"Type error comparing {date} ({type(date)}) with {start_date} ({type(start_date)})")
+                    # Try to make them comparable
+                    try:
+                        if date.to_pydatetime() < start_date.to_pydatetime():
+                            continue
+                    except:
+                        logger.warning(f"Failed to compare dates even after conversion")
+                        continue
 
-                if isinstance(end_date, pd.Timestamp) and not isinstance(date, pd.Timestamp):
-                    end_date_comp = end_date.to_pydatetime() if hasattr(end_date, 'to_pydatetime') else end_date
-
-            # Check date range
-            if start_date_comp and date_comp < start_date_comp:
-                continue
-            if end_date_comp and date_comp > end_date_comp:
-                break
+            if end_date is not None:
+                try:
+                    if date > end_date:
+                        break
+                except TypeError:
+                    logger.warning(f"Type error comparing {date} ({type(date)}) with {end_date} ({type(end_date)})")
+                    # Try to make them comparable
+                    try:
+                        if date.to_pydatetime() > end_date.to_pydatetime():
+                            break
+                    except:
+                        logger.warning(f"Failed to compare dates even after conversion")
+                        continue
 
             dates.append(date)
 
+        # Log the results of our data collection
+        logger.info(f"Found {bar_count} total bars, {len(dates)} bars in date range")
+
         if not dates:
+            if bar_count > 0:
+                logger.error(f"No data found in specified date range ({start_date} to {end_date}), but found {bar_count} total bars")
+                # Show some sample timestamps from the data
+                data_handler.reset()
+                sample_dates = []
+                for i in range(min(5, bar_count)):
+                    bar = data_handler.get_next_bar(symbol)
+                    if bar:
+                        sample_dates.append(str(bar.get_timestamp()))
+                logger.error(f"Sample timestamps from data: {sample_dates}")
             raise ValueError("No data found in specified date range")
 
         # Sort dates
         dates.sort()
 
+        # Log date range
+        logger.info(f"Date range found: {dates[0]} to {dates[-1]}")
+
         # Calculate window size in number of bars
         total_bars = len(dates)
         window_size = total_bars // self.windows
+        if window_size < 2:
+            logger.warning(f"Window size too small ({window_size} bars). Using 2 bars per window.")
+            window_size = 2
 
         # Create windows
         window_boundaries = []
@@ -761,15 +813,23 @@ class WalkForwardOptimizer(ComponentOptimizer):
             # Calculate train/test split
             split_idx = window_start + int((window_end - window_start) * self.train_size)
 
+            # Ensure indices are within bounds
+            split_idx = max(window_start + 1, min(split_idx, window_end - 1))
+
             train_start = dates[window_start]
             train_end = dates[split_idx - 1]
             test_start = dates[split_idx]
             test_end = dates[window_end - 1]
 
+            logger.info(f"Window {i+1}: Train {train_start} to {train_end}, Test {test_start} to {test_end}")
+
             window_boundaries.append((train_start, train_end, test_start, test_end))
 
         return window_boundaries
+
+ 
     
+
 
     def _analyze_window_results(self, window_results):
         """

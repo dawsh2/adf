@@ -309,7 +309,7 @@ class SimpleRiskManager(RiskManagerBase):
         if hasattr(self, 'broker') and self.broker:
             try:
                 self.broker.place_order(order)
-                logging.info(f"Order directly placed with broker: {order.get_symbol()} {order.get_direction()} {order.get_quantity()} @ {order.get_price():.2f}")
+                # logging.info(f"Order directly placed with broker: {order.get_symbol()} {order.get_direction()} {order.get_quantity()} @ {order.get_price():.2f}")
                 success = True
             except Exception as e:
                 logging.error(f"Failed to place order with broker: {e}")
@@ -319,7 +319,7 @@ class SimpleRiskManager(RiskManagerBase):
         if not success and self.event_bus:
             try:
                 self.event_bus.emit(order)
-                logging.info(f"Order emitted via event bus: {order.get_symbol()} {order.get_direction()} {order.get_quantity()} @ {order.get_price():.2f}")
+                # logging.info(f"Order emitted via event bus: {order.get_symbol()} {order.get_direction()} {order.get_quantity()} @ {order.get_price():.2f}")
                 success = True
             except Exception as e:
                 logging.error(f"Failed to emit order via event bus: {e}")

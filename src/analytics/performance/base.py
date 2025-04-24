@@ -257,7 +257,7 @@ class PerformanceCalculator(PerformanceCalculatorBase):
 
 # src/analytics/performance/__init__.py
 from .base import PerformanceCalculatorBase
-from .calculator import PerformanceCalculator
+# from .calculator import PerformanceCalculator
 
 __all__ = [
     'PerformanceCalculatorBase',

@@ -471,11 +471,15 @@ class RegimeAwareOptimizationManager(OptimizationManager):
         return regime_strategy
 
 
-# Sample evaluation functions for common metric
+# src/models/optimization/manager.py - find the evaluate_backtest function and replace it
+
 def evaluate_backtest(component, data_handler, start_date=None, end_date=None, 
-                   metric='sharpe_ratio', **kwargs):
+                     metric='sharpe_ratio', **kwargs):
     """
     Run a backtest and evaluate a specific performance metric.
+    
+    This is a wrapper around backtest functionality that returns
+    a single metric value for optimization.
     
     Args:
         component: Component to evaluate
@@ -488,9 +492,11 @@ def evaluate_backtest(component, data_handler, start_date=None, end_date=None,
     Returns:
         float: Metric value (higher is better)
     """
+    # Import the fixed backtest function
+    from src.execution.backtest.backtest import run_backtest
+    
     # Run backtest to get equity curve and trades
-    from src.models.optimization.component_optimizer import run_backtest
-    equity_curve, trade_count = run_backtest(
+    equity_curve, trades = run_backtest(
         component=component,
         data_handler=data_handler,
         start_date=start_date,
@@ -498,22 +504,18 @@ def evaluate_backtest(component, data_handler, start_date=None, end_date=None,
         **kwargs
     )
     
-    # Calculate performance metrics based only on equity curve
-    from src.analytics.performance import PerformanceCalculator
-    calculator = PerformanceCalculator()
+    # Calculate performance metrics using our enhanced analytics module
+    from src.analytics.performance import PerformanceAnalytics
+    metrics = PerformanceAnalytics.calculate_metrics(equity_curve, trades)
     
-    # Modify this to avoid using trades for calculations
-    metrics = calculator.calculate_from_equity(equity_curve)
-    
-    # Return specified metric, or 0 if not found
+    # Get the requested metric, default to sharpe_ratio if not found
     metric_value = metrics.get(metric, 0.0)
     
     # Special handling for metrics where lower is better
-    if metric in ['max_drawdown', 'volatility', 'downside_deviation']:
+    if metric in ['max_drawdown']:
         return -metric_value  # Negate so higher is better
         
-    return metric_value
-
+    return metric_value    
 
 # Factory function to create optimization manager
 
@@ -554,7 +556,7 @@ def create_optimization_manager(regime_aware: bool = False, **kwargs):
         manager.register_optimizer('walk_forward', WalkForwardOptimizer())
         
         # Register common evaluation functions
-        manager.register_evaluator('sharpe_ratio', 
+        manager.register_evaluator('sharpe_ratio',
                                  lambda comp, **kwargs: evaluate_backtest(comp, metric='sharpe_ratio', **kwargs))
         manager.register_evaluator('total_return', 
                                  lambda comp, **kwargs: evaluate_backtest(comp, metric='total_return', **kwargs))
