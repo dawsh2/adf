@@ -60,7 +60,7 @@ class SimulatedBroker:
         requested_price = order.get_price()
         
         # Log for debugging
-        #logger.debug(f"Processing order: {symbol} {direction} {quantity} @ {requested_price}")
+        logger.debug(f"Processing order: {symbol} {direction} {quantity} @ {requested_price}")
         
         # Get current market price
         market_price = self.get_market_price(symbol)
@@ -84,9 +84,9 @@ class SimulatedBroker:
         )
         
         # Log fill creation
-        #logger.info(f"Created fill: {symbol} {direction} {quantity} @ {execution_price}")
+        logger.debug(f"Created fill: {symbol} {direction} {quantity} @ {execution_price}")
         
-        # Emit fill event - FIX: Use a more robust emission method
+        # Emit fill event
         self._emit_fill(fill)
     
     def cancel_order(self, order_id):
@@ -116,7 +116,7 @@ class SimulatedBroker:
             fill: Fill event to emit
         """
         # Log that we're emitting a fill
-        #logger.info(f"Emitting fill: {fill.get_symbol()} {fill.get_direction()} {fill.get_quantity()} @ {fill.get_price()}")
+        logger.debug(f"Emitting fill: {fill.get_symbol()} {fill.get_direction()} {fill.get_quantity()} @ {fill.get_price()}")
         
         try:
             # Try all possible emission methods to ensure it works
@@ -128,12 +128,12 @@ class SimulatedBroker:
                     if hasattr(self.fill_emitter, 'emit'):
                         self.fill_emitter.emit(fill)
                         fill_emitted = True
-                        #logger.info("Fill emitted via fill_emitter.emit")
+                        logger.debug("Fill emitted via fill_emitter.emit")
                     else:
                         # Assume fill_emitter is directly callable
                         self.fill_emitter(fill)
                         fill_emitted = True
-                        #logger.info("Fill emitted via direct fill_emitter call")
+                        logger.debug("Fill emitted via direct fill_emitter call")
                 except Exception as e:
                     logger.error(f"Error emitting fill via fill_emitter: {e}")
             
@@ -142,7 +142,7 @@ class SimulatedBroker:
                 try:
                     self.event_bus.emit(fill)
                     fill_emitted = True
-                    logger.info("Fill emitted via event_bus")
+                    logger.debug("Fill emitted via event_bus")
                 except Exception as e:
                     logger.error(f"Error emitting fill via event_bus: {e}")
             

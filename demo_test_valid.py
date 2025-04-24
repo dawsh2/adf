@@ -1,8 +1,8 @@
 """
-Quick validation test to confirm the position sizing fix.
+Final fixed validation test to verify the trading system works correctly.
 
-This script creates a simplified test that verifies the position sizing fix
-for the SimpleRiskManager.
+This script creates a test that validates the complete trading pipeline
+and ensures market values are properly updated as prices change.
 """
 
 import logging
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # Import necessary components
 from src.core.events.event_bus import EventBus
 from src.core.events.event_manager import EventManager
-from src.core.events.event_types import EventType, BarEvent
+from src.core.events.event_types import EventType, BarEvent, SignalEvent, OrderEvent, FillEvent
 from src.core.events.event_utils import create_bar_event, create_signal_event
 from src.execution.portfolio import PortfolioManager
 from src.execution.brokers.simulated import SimulatedBroker
@@ -64,167 +64,201 @@ def create_synthetic_price_series(days=30, start_price=100.0, daily_return=0.01)
     
     return df, expected_total_return, prices
 
-def test_risk_manager_position_sizing():
-    """Test the improved position sizing in SimpleRiskManager."""
-    # Create portfolio with initial cash
-    portfolio = PortfolioManager(initial_cash=10000.0)
+def run_validation_test():
+    """Run a comprehensive validation test of the trading system."""
+    logger.info("=== STARTING VALIDATION TEST ===")
     
-    # Create risk manager with different position size settings
-    risk_manager = SimpleRiskManager(portfolio, position_pct=0.95)
-    
-    # Test position sizes at different prices
-    test_prices = [10.0, 100.0, 1000.0]
-    
-    logger.info("Testing position sizing with different prices:")
-    for price in test_prices:
-        # Calculate position size
-        position_size = risk_manager.calculate_position_size("TEST", price)
-        
-        # Calculate expected size based on portfolio percentage
-        expected_size = int((portfolio.get_equity() * 0.95) / price)
-        
-        logger.info(f"Price: ${price:.2f}, Position size: {position_size} shares")
-        logger.info(f"Position value: ${position_size * price:.2f}, " +
-                   f"Percentage of portfolio: {(position_size * price / portfolio.get_equity()) * 100:.2f}%")
-    
-    return True
-
-def test_full_system():
-    """Test the full system with proper position sizing."""
     # Set up event system
     event_bus = EventBus()
     event_manager = EventManager(event_bus)
     
-    # Create portfolio and broker
+    # Create portfolio with initial cash
     portfolio = PortfolioManager(initial_cash=10000.0)
-    portfolio.set_event_bus(event_bus)
     
-    broker = SimulatedBroker()
-    broker.set_event_bus(event_bus)
+    # Create bar emitter (needed by some components)
+    from src.core.events.event_emitters import BarEmitter
+    bar_emitter = BarEmitter("test_emitter", event_bus)
+    bar_emitter.start()  # Start the emitter
     
-    # Create risk manager with high position percentage
+    # Create broker with explicit fill emitter
+    broker = SimulatedBroker(fill_emitter=event_bus)
+    
+    # Create risk manager
     risk_manager = SimpleRiskManager(
         portfolio=portfolio,
         event_bus=event_bus,
         position_pct=0.95  # Use 95% of portfolio for each position
     )
+    # IMPORTANT: Set the broker reference in risk manager
+    risk_manager.broker = broker
     
-    # Register components with event manager
+    # Register components with event manager - proper event flow connections
     event_manager.register_component('portfolio', portfolio, [EventType.FILL])
     event_manager.register_component('risk_manager', risk_manager, [EventType.SIGNAL])
-    event_manager.register_component('broker', broker, [EventType.ORDER])
     
-    # Create and track event counts
+    # Direct registration of order handler to ensure it's properly connected
+    event_bus.register(EventType.ORDER, broker.place_order)
+    
+    # Initialize event counters
     event_counts = {
         'bar': 0,
-        'signal': 0,
+        'signal': 0, 
         'order': 0,
         'fill': 0
     }
     
-    def count_events(event):
+    # Event tracking handler
+    def track_event(event):
         event_type = event.get_type()
         if event_type == EventType.BAR:
             event_counts['bar'] += 1
+            if event_counts['bar'] == 1 or event_counts['bar'] % 5 == 0 or event_counts['bar'] == 30:
+                # Log every 5th bar for visibility
+                symbol = event.get_symbol() if hasattr(event, 'get_symbol') else "N/A"
+                price = event.get_close() if hasattr(event, 'get_close') else 0
+                
+                # Get portfolio equity and position value to track changes
+                market_prices = {symbol: price}
+                current_equity = portfolio.get_equity(market_prices)
+                position_value = portfolio.get_position_value()
+                
+                logger.info(f"Bar {event_counts['bar']}/30: Price=${price:.2f}, " +
+                           f"Cash: ${portfolio.cash:.2f}, Position Value: ${position_value:.2f}, " +
+                           f"Equity: ${current_equity:.2f}")
+                
         elif event_type == EventType.SIGNAL:
             event_counts['signal'] += 1
-            logger.info(f"Signal: {event.get_symbol()} {event.data.get('signal_value')} @ {event.data.get('price')}")
+            symbol = event.get_symbol() if hasattr(event, 'get_symbol') else "N/A"
+            signal_val = event.data.get('signal_value') if hasattr(event, 'data') else "N/A"
+            price = event.data.get('price') if hasattr(event, 'data') else 0
+            logger.info(f"Signal: {symbol} {signal_val} @ {price:.2f}")
+            
         elif event_type == EventType.ORDER:
             event_counts['order'] += 1
-            logger.info(f"Order: {event.get_symbol()} {event.data.get('direction')} {event.data.get('quantity')} @ {event.data.get('price')}")
+            symbol = event.get_symbol() if hasattr(event, 'get_symbol') else "N/A"
+            direction = event.data.get('direction') if hasattr(event, 'data') else "N/A"
+            quantity = event.data.get('quantity') if hasattr(event, 'data') else 0
+            price = event.data.get('price') if hasattr(event, 'data') else 0
+            logger.info(f"Order: {symbol} {direction} {quantity} @ {price:.2f}")
+            
         elif event_type == EventType.FILL:
             event_counts['fill'] += 1
-            logger.info(f"Fill: {event.get_symbol()} {event.data.get('direction')} {event.data.get('quantity')} @ {event.data.get('price')}")
-    
-    # Register event counter
+            symbol = event.get_symbol() if hasattr(event, 'get_symbol') else "N/A"
+            direction = event.get_direction() if hasattr(event, 'get_direction') else "N/A"
+            quantity = event.get_quantity() if hasattr(event, 'get_quantity') else 0
+            price = event.get_price() if hasattr(event, 'get_price') else 0
+            logger.info(f"Fill: {symbol} {direction} {quantity} @ {price:.2f}")
+            
+            # Log portfolio state after fill
+            position_value = portfolio.get_position_value()
+            current_equity = portfolio.get_equity()
+            logger.info(f"After fill - Cash: ${portfolio.cash:.2f}, Position Value: ${position_value:.2f}, " + 
+                      f"Equity: ${current_equity:.2f}")
+            
+    # Register tracker for all event types
     for event_type in [EventType.BAR, EventType.SIGNAL, EventType.ORDER, EventType.FILL]:
-        event_bus.register(event_type, count_events)
+        event_bus.register(event_type, track_event)
     
-    # Generate synthetic price data
+    # Generate synthetic data
     days = 30
-    start_price = 100.0
-    daily_return = 0.01  # 1% daily return
-    
-    df, expected_return, prices = create_synthetic_price_series(days, start_price, daily_return)
-    
-    # Generate signal for buying at first price
     symbol = "TEST"
+    df, expected_return, prices = create_synthetic_price_series(days=days)
+    
+    # Initial portfolio state
+    initial_equity = portfolio.get_equity()
+    logger.info(f"Initial state - Cash: {portfolio.cash:.2f}, Equity: {initial_equity:.2f}")
+    
+    # Generate SIGNAL for buying at the first price
     signal = create_signal_event(
-        signal_value=1,  # BUY
+        signal_value=SignalEvent.BUY,  # BUY signal
         price=prices[0],
         symbol=symbol,
         timestamp=df.index[0]
     )
     
-    # Log initial state
-    initial_equity = portfolio.get_equity()
-    logger.info(f"Initial state - Cash: {portfolio.cash:.2f}, Equity: {initial_equity:.2f}")
-    
-    # Emit signal to trigger position sizing
-    logger.info(f"Emitting BUY signal for {symbol} @ {prices[0]:.2f}")
+    # Emit the signal to trigger order generation
     event_bus.emit(signal)
+    logger.info(f"Generated BUY signal for {symbol} @ {prices[0]:.2f}")
     
-    # Check if orders were generated
-    if event_counts['order'] > 0:
-        logger.info(f"Order(s) generated: {event_counts['order']}")
-    else:
-        logger.error("No orders generated from signal!")
+    # Loop through price bars to simulate time passing
+    for i, (date, row) in enumerate(df.iterrows()):
+        # Create and emit bar event
+        bar = create_bar_event(
+            symbol=symbol,
+            timestamp=date,
+            open_price=row['open'],
+            high_price=row['high'],
+            low_price=row['low'],
+            close_price=row['close'],
+            volume=row['volume']
+        )
+        
+        # Update broker's market price data (critical for valuation)
+        broker.update_market_data(symbol, {
+            'price': row['close'],
+            'timestamp': date
+        })
+        
+        # IMPORTANT: Update portfolio's market prices directly
+        market_prices = {symbol: row['close']}
+        portfolio.update_market_data(market_prices)
+        
+        # Emit the bar event
+        event_bus.emit(bar)
+    
+    # Log final state
+    logger.info(f"Event summary: {event_counts}")
+    
+    # Calculate final values using the last price
+    final_price = prices[-1]
+    market_prices = {symbol: final_price}
+    
+    # Get final portfolio state with explicit market prices
+    final_equity = portfolio.get_equity(market_prices)
+    position_value = portfolio.get_position_value(market_prices)
+    
+    logger.info(f"Final state - Cash: ${portfolio.cash:.2f}, " +
+               f"Position Value: ${position_value:.2f}, Equity: ${final_equity:.2f}")
     
     # Check if fills occurred
     if event_counts['fill'] > 0:
-        logger.info(f"Fill(s) executed: {event_counts['fill']}")
-        
-        # Check position after fill
-        position_value = portfolio.get_position_value()
-        logger.info(f"Position value after fill: {position_value:.2f}")
-        logger.info(f"Cash after fill: {portfolio.cash:.2f}")
-        logger.info(f"Equity after fill: {portfolio.get_equity():.2f}")
-        
-        # Calculate position percentage of initial portfolio
-        position_pct = position_value / initial_equity
-        logger.info(f"Position percentage of initial portfolio: {position_pct*100:.2f}%")
-        
-        # Fast forward to final price
-        final_price = prices[-1]
-        
-        # Update portfolio for new price
-        final_equity = portfolio.get_equity({symbol: final_price})
-        final_position_value = portfolio.get_position_value({symbol: final_price})
-        
-        logger.info(f"After price change to {final_price:.2f}:")
-        logger.info(f"Position value: {final_position_value:.2f}")
-        logger.info(f"Equity: {final_equity:.2f}")
-        
-        # Calculate return and compare to expected
-        calculated_return = (final_equity / initial_equity) - 1
-        logger.info(f"Calculated return: {calculated_return:.6f} ({calculated_return*100:.2f}%)")
+        # Calculate actual return
+        actual_return = (final_equity / initial_equity) - 1
+        logger.info(f"Actual return: {actual_return:.6f} ({actual_return*100:.2f}%)")
         logger.info(f"Expected return: {expected_return:.6f} ({expected_return*100:.2f}%)")
         
-        # Check if returns match expected
-        return_diff = abs(calculated_return - expected_return)
+        # Check if returns are reasonably close
+        return_diff = abs(actual_return - expected_return)
         logger.info(f"Return difference: {return_diff:.6f} ({return_diff*100:.2f}%)")
         
-        # Consider test successful if the returns are reasonably close
-        return return_diff < 0.05  # Within 5 percentage points
+        # Get position details
+        positions = portfolio.get_position_details(market_prices)
+        logger.info(f"Final portfolio positions: {positions}")
+        
+        # Test passes if fills occurred and return is close to expected
+        test_passed = return_diff < 0.05  # Within 5 percentage points
+        
+        if test_passed:
+            logger.info("VALIDATION TEST PASSED!")
+        else:
+            logger.error("VALIDATION TEST FAILED: Returns do not match expected values")
+        
+        return test_passed
     else:
-        logger.error("No fills executed!")
+        # Get position details for debugging
+        positions = portfolio.get_position_details()
+        logger.info(f"Final portfolio positions: {positions}")
+        
+        logger.error(f"Test failed: Signal count={event_counts['signal']}, Fill count={event_counts['fill']}")
+        logger.error("VALIDATION TEST FAILED!")
         return False
 
 if __name__ == "__main__":
-    logger.info("Testing improved position sizing...")
+    success = run_validation_test()
     
-    # Test position sizing calculation
-    logger.info("\n=== POSITION SIZING TEST ===")
-    test_risk_manager_position_sizing()
-    
-    # Test full system
-    logger.info("\n=== FULL SYSTEM TEST ===")
-    success = test_full_system()
-    
-    # Print final result
-    if success:
-        logger.info("\n=== TEST PASSED ===")
-        logger.info("Position sizing fix works correctly!")
+    if not success:
+        print("\nVALIDATION TEST FAILED!")
+        print("There are still issues in the trading system.")
     else:
-        logger.info("\n=== TEST FAILED ===")
-        logger.info("Position sizing fix did not achieve expected results.")
+        print("\nVALIDATION TEST PASSED!")
+        print("The trading system is working correctly.")
