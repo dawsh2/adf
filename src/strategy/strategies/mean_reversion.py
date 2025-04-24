@@ -1,9 +1,8 @@
 """
-Mean Reversion Strategy
+Modified Mean Reversion Strategy that ignores position state when generating signals.
 
-This module implements a simple mean reversion strategy that generates
-buy signals when price is significantly below its moving average and
-sell signals when price is significantly above its moving average.
+This version generates signals based solely on z-score crossings,
+regardless of current position state. It's designed for validation testing.
 """
 import logging
 import numpy as np
@@ -16,14 +15,14 @@ logger = logging.getLogger(__name__)
 
 class MeanReversionStrategy:
     """
-    Mean Reversion Strategy.
+    Modified Mean Reversion Strategy for validation testing.
     
-    Generates signals based on deviations from the mean:
-    - Buy when price is significantly below the moving average (oversold)
-    - Sell when price is significantly above the moving average (overbought)
+    Generates signals based solely on z-score crossings without position filtering:
+    - Buy when price crosses below -z_threshold
+    - Sell when price crosses above +z_threshold
     """
     
-    def __init__(self, name="mean_reversion", symbols=None, lookback=20, z_threshold=1.5, price_key='close'):
+    def __init__(self, name="mean_reversion_modified", symbols=None, lookback=20, z_threshold=1.5, price_key='close'):
         """
         Initialize the strategy.
         
@@ -48,10 +47,14 @@ class MeanReversionStrategy:
         
         # State data
         self.prices = {symbol: [] for symbol in self.symbols}
+        self.z_scores = {symbol: [] for symbol in self.symbols}
         self.signals = {symbol: 0 for symbol in self.symbols}  # Current signal for each symbol
         self.event_bus = None
         
-        logger.info(f"Initialized MeanReversionStrategy: lookback={lookback}, z_threshold={z_threshold}")
+        # Track signal history for diagnostic purposes
+        self.signal_history = []
+        
+        logger.info(f"Initialized ModifiedMeanReversionStrategy: lookback={lookback}, z_threshold={z_threshold}")
     
     def set_event_bus(self, event_bus):
         """Set the event bus for signal emission."""
@@ -84,7 +87,7 @@ class MeanReversionStrategy:
     
     def on_bar(self, event):
         """
-        Process a bar event and generate signals.
+        Process a bar event and generate signals based solely on z-score crossings.
         
         Args:
             event: BarEvent to process
@@ -130,20 +133,53 @@ class MeanReversionStrategy:
         # Calculate z-score (number of standard deviations from mean)
         z_score = (price - mean) / std
         
-        # Current position from previous signals
-        current_position = self.signals[symbol]
+        # Update z-score history
+        self.z_scores[symbol].append(z_score)
+        if len(self.z_scores[symbol]) > self.lookback * 2:
+            self.z_scores[symbol] = self.z_scores[symbol][-self.lookback * 2:]
         
-        # Check for overbought/oversold conditions
-        if z_score < -self.z_threshold and current_position <= 0:
-            # Price is significantly below mean - buy signal
+        # Need at least 2 z-scores to detect crossings
+        if len(self.z_scores[symbol]) < 2:
+            return None
+        
+        # Get current and previous z-scores
+        current_z = z_score
+        previous_z = self.z_scores[symbol][-2]
+        
+        # MODIFIED: Generate signals based solely on z-score crossings without position filtering
+        
+        # Check for buy signal (crossing below -z_threshold)
+        if previous_z >= -self.z_threshold and current_z < -self.z_threshold:
+            # Track signal in history
+            self.signal_history.append({
+                'timestamp': event.get_timestamp(),
+                'symbol': symbol,
+                'z_score': current_z,
+                'price': price,
+                'type': 'BUY',
+                'crossing': f"{previous_z:.2f} → {current_z:.2f}"
+            })
+            
+            # Generate buy signal
             signal = self._create_signal(symbol, SignalEvent.BUY, price, event.get_timestamp())
-            self.signals[symbol] = 1  # Update position state
+            self.signals[symbol] = 1  # Track current signal state
             return signal
             
-        elif z_score > self.z_threshold and current_position >= 0:
-            # Price is significantly above mean - sell signal
+        # Check for sell signal (crossing above +z_threshold)
+        elif previous_z <= self.z_threshold and current_z > self.z_threshold:
+            # Track signal in history
+            self.signal_history.append({
+                'timestamp': event.get_timestamp(),
+                'symbol': symbol,
+                'z_score': current_z,
+                'price': price,
+                'type': 'SELL',
+                'crossing': f"{previous_z:.2f} → {current_z:.2f}"
+            })
+            
+            # Generate sell signal
             signal = self._create_signal(symbol, SignalEvent.SELL, price, event.get_timestamp())
-            self.signals[symbol] = -1  # Update position state
+            self.signals[symbol] = -1  # Track current signal state
             return signal
             
         return None
@@ -184,4 +220,10 @@ class MeanReversionStrategy:
     def reset(self):
         """Reset the strategy state."""
         self.prices = {symbol: [] for symbol in self.symbols}
+        self.z_scores = {symbol: [] for symbol in self.symbols}
         self.signals = {symbol: 0 for symbol in self.symbols}
+        self.signal_history = []
+    
+    def get_signal_history(self):
+        """Get the signal generation history for analysis."""
+        return self.signal_history

@@ -12,7 +12,7 @@ class PerformanceAnalytics:
     """
     Calculate and display performance metrics for trading strategies.
     """
-    
+
     @staticmethod
     def calculate_metrics(equity_curve: pd.DataFrame, trades: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -56,6 +56,7 @@ class PerformanceAnalytics:
         
         # Return metrics
         metrics['absolute_return'] = metrics['final_equity'] - metrics['initial_equity']
+        # Fix: Ensure total_return is expressed as a percentage
         metrics['total_return'] = (metrics['final_equity'] / metrics['initial_equity'] - 1) * 100
         
         # Time-based metrics
@@ -116,7 +117,84 @@ class PerformanceAnalytics:
             metrics['trade_count'] = len(trades)
             
             # Filter trades with PnL data
-            pnl_trades = [t for t in trades if 'pnl' in t and t['pnl'] != 0]
+            # Fix: Ensure we calculate PnL for all trades if not provided
+            if not any('pnl' in t and t['pnl'] != 0 for t in trades):
+                # Calculate PnL based on direction and price differences
+                # Group trades by symbol
+                trades_by_symbol = {}
+                for trade in trades:
+                    symbol = trade['symbol']
+                    if symbol not in trades_by_symbol:
+                        trades_by_symbol[symbol] = []
+                    trades_by_symbol[symbol].append(trade)
+                
+                # For each symbol, calculate PnL from sequential trades
+                for symbol, symbol_trades in trades_by_symbol.items():
+                    # Sort by timestamp
+                    symbol_trades.sort(key=lambda x: x['timestamp'])
+                    
+                    # Initialize tracking variables
+                    position = 0  # Current position size
+                    avg_price = 0  # Average entry price
+                    
+                    # Process trades sequentially
+                    for trade in symbol_trades:
+                        direction = trade['direction']
+                        quantity = trade['quantity']
+                        price = trade['price']
+                        
+                        if direction == 'BUY':
+                            if position <= 0:  # New position or cover short
+                                # Calculate P&L for covering short position
+                                if position < 0:
+                                    cover_qty = min(abs(position), quantity)
+                                    trade['pnl'] = (avg_price - price) * cover_qty
+                                else:
+                                    trade['pnl'] = 0
+                                
+                                # Update position
+                                new_position = position + quantity
+                                if new_position > 0:  # If we're now long
+                                    # Update average price for the long position
+                                    long_qty = new_position
+                                    avg_price = price  # Simple case: starting a new long
+                                else:
+                                    avg_price = 0  # Fully covered short
+                                position = new_position
+                            else:  # Adding to long position
+                                # Update average price
+                                total_cost = position * avg_price + quantity * price
+                                position += quantity
+                                avg_price = total_cost / position
+                                trade['pnl'] = 0
+                        
+                        elif direction == 'SELL':
+                            if position >= 0:  # Selling long position or new short
+                                # Calculate P&L for selling long position
+                                if position > 0:
+                                    sell_qty = min(position, quantity)
+                                    trade['pnl'] = (price - avg_price) * sell_qty
+                                else:
+                                    trade['pnl'] = 0
+                                
+                                # Update position
+                                new_position = position - quantity
+                                if new_position < 0:  # If we're now short
+                                    # Update average price for the short position
+                                    short_qty = abs(new_position)
+                                    avg_price = price  # Simple case: starting a new short
+                                else:
+                                    avg_price = 0  # Fully sold long
+                                position = new_position
+                            else:  # Adding to short position
+                                # Update average price
+                                total_cost = abs(position) * avg_price + quantity * price
+                                position -= quantity
+                                avg_price = total_cost / abs(position)
+                                trade['pnl'] = 0
+            
+            # Now get trades with PnL
+            pnl_trades = [t for t in trades if 'pnl' in t]
             
             if pnl_trades:
                 pnl_values = [t['pnl'] for t in pnl_trades]
@@ -128,7 +206,12 @@ class PerformanceAnalytics:
                 
                 metrics['win_count'] = len(winning_trades)
                 metrics['loss_count'] = len(losing_trades)
-                metrics['win_rate'] = len(winning_trades) / len(pnl_trades) * 100 if pnl_trades else 0
+                
+                # Fix: Calculate win rate properly
+                if len(pnl_trades) > 0:
+                    metrics['win_rate'] = len(winning_trades) / len(pnl_trades) * 100
+                else:
+                    metrics['win_rate'] = 0
                 
                 if winning_trades:
                     metrics['avg_win'] = sum(t['pnl'] for t in winning_trades) / len(winning_trades)
@@ -183,47 +266,7 @@ class PerformanceAnalytics:
             metrics['max_loss'] = 0
             metrics['profit_factor'] = 0
             metrics['expectancy'] = 0
-        
-        # Risk-adjusted metrics
-        if len(equity_curve) > 1:
-            # Calculate returns
-            equity_curve['return'] = equity_curve['equity'].pct_change().fillna(0)
-            
-            # Calculate Sharpe ratio (assuming daily data)
-            risk_free_rate = 0  # Simplification
-            returns_mean = equity_curve['return'].mean()
-            returns_std = equity_curve['return'].std()
-            
-            # Sharpe ratio
-            if returns_std > 0:
-                metrics['sharpe_ratio'] = (returns_mean - risk_free_rate) / returns_std
-                # Annualized Sharpe (assuming daily data)
-                metrics['sharpe_ratio'] = metrics['sharpe_ratio'] * np.sqrt(252)
-            else:
-                metrics['sharpe_ratio'] = 0
-            
-            # Sortino ratio (downside deviation only)
-            downside_returns = equity_curve.loc[equity_curve['return'] < 0, 'return']
-            downside_deviation = downside_returns.std()
-            
-            if downside_deviation > 0:
-                metrics['sortino_ratio'] = (returns_mean - risk_free_rate) / downside_deviation
-                # Annualized Sortino (assuming daily data)
-                metrics['sortino_ratio'] = metrics['sortino_ratio'] * np.sqrt(252)
-            else:
-                metrics['sortino_ratio'] = 0
-                
-            # Calmar ratio (return / max drawdown)
-            if metrics['max_drawdown'] != 0:
-                metrics['calmar_ratio'] = abs(metrics['annualized_return'] / metrics['max_drawdown'])
-            else:
-                metrics['calmar_ratio'] = 0
-        else:
-            metrics['sharpe_ratio'] = 0
-            metrics['sortino_ratio'] = 0
-            metrics['calmar_ratio'] = 0
-        
-        return metrics
+
     
     @staticmethod
     def display_metrics(metrics: Dict[str, Any], title: str = "Strategy Performance") -> str:

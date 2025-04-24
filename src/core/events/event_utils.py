@@ -2,6 +2,7 @@ import json
 import datetime
 import asyncio
 import inspect
+import logging
 from typing import Dict, List, Any, Optional, Union, Callable, Coroutine
 
 from collections import defaultdict
@@ -12,6 +13,7 @@ from .event_types import (
     WebSocketEvent, LifecycleEvent, ErrorEvent
 )
 
+logger = logging.getLogger(__name__)
 # Event creation utility functions
 
 # Add to src/core/events/event_utils.py
@@ -31,6 +33,8 @@ class EventTracker:
         self.verbose = verbose
         self.events = defaultdict(list)
         self.event_counts = defaultdict(int)
+        # Initialize logger inside the class
+        self.logger = logging.getLogger(__name__)
     
     def track_event(self, event):
         """
@@ -61,29 +65,29 @@ class EventTracker:
             symbol = event.get_symbol()
             signal_value = event.get_signal_value()
             direction = "BUY" if signal_value == SignalEvent.BUY else "SELL" if signal_value == SignalEvent.SELL else "NEUTRAL"
-            logger.debug(f"Signal [{event_id}]: {symbol} {direction}")
+            self.logger.debug(f"Signal [{event_id}]: {symbol} {direction}")
             
         elif event_type == EventType.ORDER:
             symbol = event.get_symbol()
             direction = event.get_direction()
             quantity = event.get_quantity()
-            logger.debug(f"Order [{event_id}]: {symbol} {direction} {quantity}")
+            self.logger.debug(f"Order [{event_id}]: {symbol} {direction} {quantity}")
             
         elif event_type == EventType.FILL:
             symbol = event.get_symbol()
             direction = event.get_direction()
             quantity = event.get_quantity()
             price = event.get_price()
-            logger.debug(f"Fill [{event_id}]: {symbol} {direction} {quantity} @ {price:.2f}")
+            self.logger.debug(f"Fill [{event_id}]: {symbol} {direction} {quantity} @ {price:.2f}")
             
         elif event_type == EventType.BAR:
             symbol = event.get_symbol()
             timestamp = event.get_timestamp()
             close = event.get_close()
-            logger.debug(f"Bar [{event_id}]: {symbol} @ {timestamp} - Close: {close:.2f}")
+            self.logger.debug(f"Bar [{event_id}]: {symbol} @ {timestamp} - Close: {close:.2f}")
             
         else:
-            logger.debug(f"Event [{event_type.name}]: ID={event.get_id()}")
+            self.logger.debug(f"Event [{event_type.name}]: ID={event.get_id()}")
     
     def get_summary(self):
         """
@@ -139,6 +143,10 @@ class EventTracker:
         self.events.clear()
         self.event_counts.clear()
 
+
+
+        
+        
 def create_bar_event(symbol, timestamp, open_price, high_price, 
                      low_price, close_price, volume):
     """Create a standardized bar event."""

@@ -12,13 +12,13 @@ from src.core.events.event_types import EventType, BarEvent, SignalEvent, OrderE
 from src.core.events.event_utils import create_order_event, create_fill_event
 from src.execution.portfolio import PortfolioManager
 from src.execution.brokers.simulated import SimulatedBroker
-from src.strategy.risk.risk_manager import SimpleRiskManager
+from src.strategy.risk.risk_manager import SimplePassthroughRiskManager
 
 logger = logging.getLogger(__name__)
 
 def run_backtest(component, data_handler, start_date=None, end_date=None, timestamp_translator=None, **kwargs):
     """
-    Enhanced version of run_backtest that properly handles events, timestamps, and position liquidation.
+    Enhanced version of run_backtest that properly handles trades and P&L calculation.
     
     Args:
         component: Strategy component to test
@@ -37,6 +37,8 @@ def run_backtest(component, data_handler, start_date=None, end_date=None, timest
     """
     import logging
     import pandas as pd
+    from src.execution.trade_tracker import TradeTracker  # Import the new TradeTracker
+    
     logger = logging.getLogger(__name__)
     
     # Extract additional parameters
@@ -78,12 +80,15 @@ def run_backtest(component, data_handler, start_date=None, end_date=None, timest
     broker.set_event_bus(event_bus)
     
     # Create risk manager with position sizing
-    risk_manager = SimpleRiskManager(portfolio, event_bus, fixed_size=position_size)
+    risk_manager = SimplePassthroughRiskManager(portfolio=portfolio, event_bus=event_bus)
     risk_manager.broker = broker  # Direct connection to broker
     
     # Set event bus for component
     if hasattr(component, 'set_event_bus'):
         component.set_event_bus(event_bus)
+    
+    # Create trade tracker
+    trade_tracker = TradeTracker(initial_cash=initial_cash)
     
     # Track events for analysis
     event_counts = {
@@ -92,50 +97,78 @@ def run_backtest(component, data_handler, start_date=None, end_date=None, timest
         'orders': 0,
         'fills': 0
     }
-    trades = []
+    
+    # Track market prices for position valuation
+    market_prices = {}
     
     def track_event(event):
-        """Track events for analysis and debugging."""
+        """Track events for analysis and updating trade tracker."""
         event_type = event.get_type()
+        
         if event_type == EventType.BAR:
             event_counts['bars'] += 1
+            
+            # Update market prices
+            symbol = event.get_symbol()
+            price = event.get_close()
+            timestamp = event.get_timestamp()
+            market_prices[symbol] = price
+            
+            # Update trade tracker equity
+            trade_tracker.update_equity(timestamp, market_prices)
+            
+            # Debug log
+            if debug and event_counts['bars'] % 100 == 0:
+                logger.debug(f"Bar {event_counts['bars']}: {symbol} @ {price:.2f}")
+                
         elif event_type == EventType.SIGNAL:
             event_counts['signals'] += 1
             # Debug log signal
             if debug:
-                logger.debug(f"Signal generated: {event.get_symbol()} {event.get_signal_value()}")
+                symbol = event.get_symbol()
+                signal_value = event.get_signal_value()
+                logger.debug(f"Signal: {symbol} {signal_value}")
+                
         elif event_type == EventType.ORDER:
             event_counts['orders'] += 1
             # Debug log order
             if debug:
-                logger.debug(f"Order generated: {event.get_symbol()} {event.get_direction()} {event.get_quantity()} @ {event.get_price()}")
+                symbol = event.get_symbol()
+                direction = event.get_direction()
+                quantity = event.get_quantity()
+                logger.debug(f"Order: {symbol} {direction} {quantity}")
+                
         elif event_type == EventType.FILL:
             event_counts['fills'] += 1
-            # Track trade for analysis
-            if hasattr(event, 'get_symbol') and hasattr(event, 'get_direction'):
-                trades.append({
-                    'timestamp': event.get_timestamp(),
-                    'symbol': event.get_symbol(),
-                    'direction': event.get_direction(),
-                    'quantity': event.get_quantity(),
-                    'price': event.get_price(),
-                    'commission': event.get_commission() if hasattr(event, 'get_commission') else 0,
-                    'pnl': 0  # Will be calculated later
-                })
-                if debug:
-                    logger.debug(f"Fill executed: {event.get_symbol()} {event.get_direction()} {event.get_quantity()} @ {event.get_price()}")
+            
+            # Process fill with trade tracker
+            fill_data = {
+                'timestamp': event.get_timestamp(),
+                'symbol': event.get_symbol(),
+                'direction': event.get_direction(),
+                'quantity': event.get_quantity(),
+                'price': event.get_price(),
+                'commission': event.get_commission() if hasattr(event, 'get_commission') else 0.0
+            }
+            
+            pnl = trade_tracker.process_fill(fill_data)
+            
+            # Debug log fill
+            if debug:
+                logger.debug(f"Fill: {fill_data['symbol']} {fill_data['direction']} " +
+                           f"{fill_data['quantity']} @ {fill_data['price']:.2f}, PnL: {pnl:.2f}")
     
-    # Direct registration of event handlers to ensure they're properly connected
+    # Register event tracking for all event types
+    for event_type in [EventType.BAR, EventType.SIGNAL, EventType.ORDER, EventType.FILL]:
+        event_bus.register(event_type, track_event)
+    
+    # Direct registration of event handlers
     event_bus.register(EventType.SIGNAL, risk_manager.on_signal)
     event_bus.register(EventType.ORDER, broker.place_order)
     event_bus.register(EventType.FILL, portfolio.on_fill)
     
     # Register component with event manager
     event_manager.register_component('strategy', component, [EventType.BAR])
-    
-    # Register tracking for all event types
-    for event_type in [EventType.BAR, EventType.SIGNAL, EventType.ORDER, EventType.FILL]:
-        event_bus.register(event_type, track_event)
     
     # Reset components
     component.reset()
@@ -146,13 +179,9 @@ def run_backtest(component, data_handler, start_date=None, end_date=None, timest
     # Get symbols from component
     symbols = component.symbols if hasattr(component, 'symbols') else []
     
-    # Dictionary to track market prices for all symbols
-    market_prices = {}
-    
     # Run backtest
-    logger.info(f"Starting fixed backtest with {len(symbols)} symbols")
-    bars_processed = 0
-    last_bar_timestamp = None  # To track last bar timestamp for position liquidation
+    logger.info(f"Starting backtest with {len(symbols)} symbols")
+    last_bar_timestamp = None
     
     # Process each symbol
     for symbol in symbols:
@@ -164,11 +193,9 @@ def run_backtest(component, data_handler, start_date=None, end_date=None, timest
             if bar is None:
                 break
             
-            bars_processed += 1
-            
             # Get and possibly translate timestamp
             bar_timestamp = bar.get_timestamp()
-            last_bar_timestamp = bar_timestamp  # Track for position liquidation
+            last_bar_timestamp = bar_timestamp
             
             # Apply timestamp translation if provided
             if timestamp_translator and callable(timestamp_translator):
@@ -181,10 +208,11 @@ def run_backtest(component, data_handler, start_date=None, end_date=None, timest
             if start_date is not None:
                 try:
                     # Handle timezone differences
-                    if hasattr(bar_timestamp, 'tzinfo') and bar_timestamp.tzinfo is not None:
-                        if hasattr(start_date, 'tzinfo') and start_date.tzinfo is None:
-                            start_date = start_date.replace(tzinfo=bar_timestamp.tzinfo)
-                    elif hasattr(start_date, 'tzinfo') and start_date.tzinfo is not None:
+                    if (hasattr(bar_timestamp, 'tzinfo') and bar_timestamp.tzinfo is not None and
+                        hasattr(start_date, 'tzinfo') and start_date.tzinfo is None):
+                        start_date = start_date.replace(tzinfo=bar_timestamp.tzinfo)
+                    elif (hasattr(start_date, 'tzinfo') and start_date.tzinfo is not None and
+                         hasattr(bar_timestamp, 'tzinfo') and bar_timestamp.tzinfo is None):
                         bar_timestamp = bar_timestamp.replace(tzinfo=start_date.tzinfo)
                         
                     if bar_timestamp < start_date:
@@ -198,10 +226,11 @@ def run_backtest(component, data_handler, start_date=None, end_date=None, timest
             if end_date is not None:
                 try:
                     # Handle timezone differences
-                    if hasattr(bar_timestamp, 'tzinfo') and bar_timestamp.tzinfo is not None:
-                        if hasattr(end_date, 'tzinfo') and end_date.tzinfo is None:
-                            end_date = end_date.replace(tzinfo=bar_timestamp.tzinfo)
-                    elif hasattr(end_date, 'tzinfo') and end_date.tzinfo is not None:
+                    if (hasattr(bar_timestamp, 'tzinfo') and bar_timestamp.tzinfo is not None and
+                        hasattr(end_date, 'tzinfo') and end_date.tzinfo is None):
+                        end_date = end_date.replace(tzinfo=bar_timestamp.tzinfo)
+                    elif (hasattr(end_date, 'tzinfo') and end_date.tzinfo is not None and
+                         hasattr(bar_timestamp, 'tzinfo') and bar_timestamp.tzinfo is None):
                         bar_timestamp = bar_timestamp.replace(tzinfo=end_date.tzinfo)
                     
                     if bar_timestamp > end_date:
@@ -212,182 +241,32 @@ def run_backtest(component, data_handler, start_date=None, end_date=None, timest
                     if bar_timestamp.replace(tzinfo=None) > end_date.replace(tzinfo=None):
                         break
             
-            # Update market price data (used for position valuation)
-            current_price = bar.get_close()
-            market_prices[symbol] = current_price
-            
-            # Update market data in broker to ensure correct execution prices
-            if hasattr(broker, 'update_market_data'):
-                market_data = {
-                    'price': current_price,
-                    'timestamp': bar_timestamp
-                }
-                broker.update_market_data(symbol, market_data)
+            # Update broker's market data
+            price = bar.get_close()
+            broker.update_market_data(symbol, {
+                'price': price,
+                'timestamp': bar_timestamp
+            })
             
             # Emit bar event
             event_bus.emit(bar)
     
-    # Liquidate all positions at the end of the backtest - fix issue with position liquidation
-    position_details = portfolio.get_position_details(market_prices)
-    if position_details:
+    # Liquidate all positions at the end of the backtest
+    if last_bar_timestamp:
         logger.info("Liquidating all positions at the end of the backtest")
-        
-        for position in position_details:
-            symbol = position['symbol']
-            quantity = position['quantity']
-            
-            # Skip if no position
-            if quantity == 0:
-                continue
-                
-            # Get last price for the symbol
-            last_price = market_prices.get(symbol, position['cost_basis'])
-            
-            # Determine direction for liquidation (opposite of position direction)
-            direction = "SELL" if quantity > 0 else "BUY"
-            abs_quantity = abs(quantity)
-            
-            # Create liquidation order
-            liquidation_order = create_order_event(
-                symbol=symbol,
-                order_type="MARKET",
-                direction=direction,
-                quantity=abs_quantity,
-                price=last_price,
-                timestamp=last_bar_timestamp
-            )
-            
-            # Process liquidation order
-            logger.info(f"Liquidating position: {symbol} {direction} {abs_quantity} @ {last_price}")
-            broker.place_order(liquidation_order)
-            
-            # Add to order count
-            event_counts['orders'] += 1
+        trade_tracker.liquidate_positions(last_bar_timestamp, market_prices)
     
-    # Clean up position dictionary by removing positions with zero quantity
-    def cleanup_zero_positions(portfolio):
-        """Remove positions with zero quantity."""
-        zero_positions = []
-        for symbol, position in portfolio.positions.items():
-            if position.quantity == 0:
-                zero_positions.append(symbol)
-        
-        # Remove the zero positions
-        for symbol in zero_positions:
-            del portfolio.positions[symbol]
-        
-        if zero_positions:
-            logger.info(f"Cleaned up {len(zero_positions)} zero positions from portfolio")
-
-    # After all positions are liquidated, clean up the portfolio
-    cleanup_zero_positions(portfolio)
-    
-    # Create equity curve DataFrame - fix equity calculation
-    # First check if portfolio has equity history
-    if hasattr(portfolio, 'equity_history') and portfolio.equity_history:
-        # Use portfolio's detailed equity history
-        equity_curve = pd.DataFrame(portfolio.equity_history)
-    else:
-        # Fall back to basic calculation
-        equity_curve = pd.DataFrame({
-            'timestamp': [portfolio.last_update_time],
-            'equity': [portfolio.get_equity(market_prices)]
-        })
-    
-    # Calculate PnL for each trade using trade pairs
-    pnl_transactions = []
-    
-    # Group trades by symbol
-    trades_by_symbol = {}
-    for trade in trades:
-        symbol = trade['symbol']
-        if symbol not in trades_by_symbol:
-            trades_by_symbol[symbol] = []
-        trades_by_symbol[symbol].append(trade)
-    
-    # Process each symbol's trades
-    for symbol, symbol_trades in trades_by_symbol.items():
-        # Sort by timestamp
-        symbol_trades.sort(key=lambda x: x['timestamp'])
-        
-        # Track position and cost basis for PnL calculation
-        position = 0
-        cost_basis = 0
-        total_cost = 0
-        
-        for trade in symbol_trades:
-            direction = trade['direction']
-            quantity = trade['quantity']
-            price = trade['price']
-            
-            # Calculate trade PnL
-            if direction == 'BUY':
-                # Buying increases position
-                if position == 0:
-                    # New position
-                    position = quantity
-                    cost_basis = price
-                    total_cost = quantity * price
-                else:
-                    # Adding to position
-                    old_cost = position * cost_basis
-                    new_cost = quantity * price
-                    position += quantity
-                    total_cost = old_cost + new_cost
-                    cost_basis = total_cost / position if position > 0 else 0
-                
-                trade['pnl'] = 0  # No P&L on buys
-                
-            elif direction == 'SELL':
-                if position > 0:
-                    # Selling from a long position
-                    sell_quantity = min(position, quantity)
-                    sell_cost = sell_quantity * cost_basis
-                    sell_proceeds = sell_quantity * price
-                    trade_pnl = sell_proceeds - sell_cost
-                    
-                    # Update position
-                    position -= sell_quantity
-                    if position > 0:
-                        # Position reduced but still open
-                        total_cost = position * cost_basis
-                    else:
-                        # Position closed
-                        position = 0
-                        cost_basis = 0
-                        total_cost = 0
-                    
-                    trade['pnl'] = trade_pnl
-                else:
-                    # Short selling
-                    trade['pnl'] = 0  # P&L will be calculated on covering
-            
-            # Add to PnL transactions for detailed analysis
-            pnl_transactions.append({
-                'timestamp': trade['timestamp'],
-                'symbol': symbol,
-                'direction': direction,
-                'quantity': quantity,
-                'price': price,
-                'position_after': position,
-                'cost_basis_after': cost_basis,
-                'pnl': trade['pnl']
-            })
-    
-    # Get final equity and position details
-    final_equity = portfolio.get_equity(market_prices)
-    final_positions = portfolio.get_position_details(market_prices)
+    # Get equity curve and trades
+    equity_curve = trade_tracker.get_equity_curve()
+    trades = trade_tracker.get_closed_trades()
     
     # Log statistics
-    logger.info(f"Backtest complete - Events: {event_counts}")
-    logger.info(f"Final portfolio: Cash={portfolio.cash}, Positions={len(final_positions)}")
-    logger.info(f"Final equity: {final_equity}")
+    logger.info(f"=== BACKTEST COMPLETE ===")
+    logger.info(f"Events processed: {event_counts}")
+    logger.info(f"Trades executed: {len(trades)}")
     
-    # Log detailed position information
-    if final_positions:
-        logger.info("Final positions:")
-        for position in final_positions:
-            logger.info(f"  {position['symbol']}: {position['quantity']} shares @ {position['cost_basis']:.2f}, " +
-                       f"Market value: {position['market_value']:.2f}, P&L: {position['total_pnl']:.2f}")
+    # Get trade statistics
+    trade_stats = trade_tracker.get_trade_statistics()
+    logger.info(f"Trade statistics: {trade_stats}")
     
     return equity_curve, trades

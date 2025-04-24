@@ -187,41 +187,12 @@ class SimpleRiskManager:
             
         # In this simplified implementation, allow the trade
         return True
-    
+
     def calculate_position_size(self, symbol, price, signal_strength=1.0):
-        """
-        Calculate appropriate position size based on portfolio value.
-        
-        Args:
-            symbol: Symbol to trade
-            price: Current price
-            signal_strength: Optional signal strength modifier (0.0-1.0)
-            
-        Returns:
-            int: Number of shares to trade
-        """
-        # Get portfolio equity
-        portfolio_value = self.portfolio.get_equity()
-        
-        # Calculate position size based on portfolio percentage
-        target_value = portfolio_value * self.position_pct
-        
-        # Determine shares based on target value
-        max_shares = int(target_value / price)
-        
-        # Apply signal strength modifier
-        if signal_strength < 1.0:
-            max_shares = int(max_shares * signal_strength)
-            
-        # Ensure minimum size of 1 share if trading at all
-        shares = max(1, max_shares)
-        
-        if self.debug:
-            logger.debug(f"Position sizing: {shares} shares of {symbol} @ {price:.2f} " +
-                   f"(Portfolio %: {self.position_pct*100:.0f}%, Portfolio: {portfolio_value:.2f})")
-            
-        return shares
-    
+        """Calculate position size - simplified to always return 1."""
+        return 1  # Always return 1 share regardless of portfolio size
+
+
     def on_signal(self, event):
         """Process a signal event and produce an order if appropriate."""
         if not isinstance(event, SignalEvent):
@@ -252,42 +223,25 @@ class SimpleRiskManager:
 
         # CASE 1: BUY signal
         if signal_value == SignalEvent.BUY:
-            # Case 1A: Currently no position
-            if current_state == 0:
-                # Create BUY order for new long position
-                order = create_order_event(
-                    symbol=symbol,
-                    order_type="MARKET",
-                    direction="BUY",
-                    quantity=position_size,
-                    price=price,
-                    timestamp=timestamp
-                )
-                # Create order and update state
-                order_success = self._emit_order(order)
-                if order_success:
-                    self.position_state[symbol] = 1  # Mark as long
-                    if self.debug:
-                        logger.debug(f"Opening LONG position for {symbol}: {position_size} @ {price:.2f}")
+            # Only act if not already long
+            if current_state != 1:
+                if current_state == -1:
+                    # Currently short - close position and go long in one step
+                    # First, close short position
+                    close_order = create_order_event(
+                        symbol=symbol,
+                        order_type="MARKET",
+                        direction="BUY",  # Buy to cover short
+                        quantity=position_size,
+                        price=price,
+                        timestamp=timestamp
+                    )
+                    close_success = self._emit_order(close_order)
 
-            # Case 1B: Currently short - close short position then go long
-            elif current_state == -1:
-                # Close short position (buy to cover)
-                cover_order = create_order_event(
-                    symbol=symbol,
-                    order_type="MARKET",
-                    direction="BUY",  # Buy to cover short
-                    quantity=position_size,
-                    price=price,
-                    timestamp=timestamp
-                )
-                # Process cover order
-                cover_success = self._emit_order(cover_order)
-                if cover_success:
-                    if self.debug:
+                    if close_success and self.debug:
                         logger.debug(f"Closing SHORT position for {symbol}: {position_size} @ {price:.2f}")
 
-                    # Then go long with another order
+                    # Then go long 
                     long_order = create_order_event(
                         symbol=symbol,
                         order_type="MARKET",
@@ -300,34 +254,47 @@ class SimpleRiskManager:
                         self.position_state[symbol] = 1  # Mark as long
                         if self.debug:
                             logger.debug(f"Opening LONG position for {symbol}: {position_size} @ {price:.2f}")
-                    else:
-                        self.position_state[symbol] = 0  # Mark as neutral if second order fails
-
-            # Case 1C: Already long - do nothing
-            else:  # current_state == 1
+                else:
+                    # Currently neutral - just go long
+                    order = create_order_event(
+                        symbol=symbol,
+                        order_type="MARKET",
+                        direction="BUY",
+                        quantity=position_size,
+                        price=price,
+                        timestamp=timestamp
+                    )
+                    order_success = self._emit_order(order)
+                    if order_success:
+                        self.position_state[symbol] = 1  # Mark as long
+                        if self.debug:
+                            logger.debug(f"Opening LONG position for {symbol}: {position_size} @ {price:.2f}")
+            else:
+                # Already long - do nothing
                 if self.debug:
                     logger.debug(f"Ignoring BUY signal for {symbol}: already in LONG position")
 
         # CASE 2: SELL signal
         elif signal_value == SignalEvent.SELL:
-            # Case 2A: Currently long - close long then go short
-            if current_state == 1:
-                # Create SELL order to close long
-                close_order = create_order_event(
-                    symbol=symbol,
-                    order_type="MARKET",
-                    direction="SELL",
-                    quantity=position_size,
-                    price=price,
-                    timestamp=timestamp
-                )
-                # Process close order
-                close_success = self._emit_order(close_order)
-                if close_success:
-                    if self.debug:
+            # Only act if not already short
+            if current_state != -1:
+                if current_state == 1:
+                    # Currently long - close position and go short in one step
+                    # First, close long position
+                    close_order = create_order_event(
+                        symbol=symbol,
+                        order_type="MARKET",
+                        direction="SELL",
+                        quantity=position_size,
+                        price=price,
+                        timestamp=timestamp
+                    )
+                    close_success = self._emit_order(close_order)
+
+                    if close_success and self.debug:
                         logger.debug(f"Closing LONG position for {symbol}: {position_size} @ {price:.2f}")
 
-                    # Then go short with another order
+                    # Then go short
                     short_order = create_order_event(
                         symbol=symbol,
                         order_type="MARKET",
@@ -340,31 +307,27 @@ class SimpleRiskManager:
                         self.position_state[symbol] = -1  # Mark as short
                         if self.debug:
                             logger.debug(f"Opening SHORT position for {symbol}: {position_size} @ {price:.2f}")
-                    else:
-                        self.position_state[symbol] = 0  # Mark as neutral if second order fails
-
-            # Case 2B: Currently no position - open short position
-            elif current_state == 0:
-                # Create SELL order to go short
-                order = create_order_event(
-                    symbol=symbol,
-                    order_type="MARKET",
-                    direction="SELL",
-                    quantity=position_size,
-                    price=price,
-                    timestamp=timestamp
-                )
-                # Process order
-                order_success = self._emit_order(order)
-                if order_success:
-                    self.position_state[symbol] = -1  # Mark as short
-                    if self.debug:
-                        logger.debug(f"Opening SHORT position for {symbol}: {position_size} @ {price:.2f}")
-
-            # Case 2C: Already short - do nothing
-            else:  # current_state == -1
+                else:
+                    # Currently neutral - just go short
+                    order = create_order_event(
+                        symbol=symbol,
+                        order_type="MARKET",
+                        direction="SELL",
+                        quantity=position_size,
+                        price=price,
+                        timestamp=timestamp
+                    )
+                    order_success = self._emit_order(order)
+                    if order_success:
+                        self.position_state[symbol] = -1  # Mark as short
+                        if self.debug:
+                            logger.debug(f"Opening SHORT position for {symbol}: {position_size} @ {price:.2f}")
+            else:
+                # Already short - do nothing
                 if self.debug:
                     logger.debug(f"Ignoring SELL signal for {symbol}: already in SHORT position")
+    
+
 
     def _emit_order(self, order):
         """
@@ -405,3 +368,198 @@ class SimpleRiskManager:
         """Reset the risk manager state."""
         self.position_state = {}
         self.orders = []
+
+
+
+"""
+Simple passthrough risk manager that directly converts signals to orders.
+This is designed for testing and validation purposes.
+"""
+
+class SimplePassthroughRiskManager:
+    """
+    A simplified risk manager that directly passes signals to orders without filtering.
+    Designed for testing and validation to ensure a 1:1 mapping between signals and trades.
+    """
+    
+    def __init__(self, portfolio, event_bus=None):
+        """
+        Initialize the passthrough risk manager.
+        
+        Args:
+            portfolio: Portfolio manager (used for reference only)
+            event_bus: Event bus for emitting orders
+        """
+        self.portfolio = portfolio
+        self.event_bus = event_bus
+        self.broker = None  # Direct broker connection
+        
+        # Track generated orders for debugging
+        self.orders = []
+        
+        # Track current position state for reference only (not used for decisions)
+        self.position_state = {}
+        
+        # Debug flag
+        self.debug = False
+    
+    def set_event_bus(self, event_bus):
+        """Set the event bus."""
+        self.event_bus = event_bus
+        return self
+    
+    def set_debug(self, debug=True):
+        """Enable or disable debug mode."""
+        self.debug = debug
+        return self
+
+    def on_signal(self, event):
+        """Process a signal event and produce an order if appropriate."""
+        if not isinstance(event, SignalEvent):
+            return
+
+        # Extract signal details
+        symbol = event.get_symbol()
+        signal_value = event.get_signal_value()
+        price = event.get_price()
+        timestamp = event.get_timestamp()
+
+        # Initialize position state if not exists
+        if symbol not in self.position_state:
+            self.position_state[symbol] = 0
+
+        # Get current position state (0=neutral, 1=long, -1=short)
+        current_state = self.position_state[symbol]
+
+        # Calculate position size (always 1 for simplicity)
+        position_size = 1
+
+        # CASE 1: BUY signal
+        if signal_value == SignalEvent.BUY:
+            # If currently short, close position first
+            if current_state == -1:
+                close_order = create_order_event(
+                    symbol=symbol,
+                    order_type="MARKET",
+                    direction="BUY",  # Buy to cover short
+                    quantity=1,
+                    price=price,
+                    timestamp=timestamp
+                )
+
+                # Emit order to close short position
+                self._emit_order(close_order)
+                self.position_state[symbol] = 0  # Update to neutral
+
+                # Log position closure
+                if self.debug:
+                    logger.debug(f"Closed SHORT position for {symbol}: 1 @ {price:.2f}")
+
+            # Now open long position if not already long
+            if current_state != 1:  # If not already long
+                long_order = create_order_event(
+                    symbol=symbol,
+                    order_type="MARKET",
+                    direction="BUY",
+                    quantity=1,
+                    price=price,
+                    timestamp=timestamp
+                )
+
+                # Emit order to open long position
+                if self._emit_order(long_order):
+                    self.position_state[symbol] = 1  # Mark as long
+                    if self.debug:
+                        logger.debug(f"Opened LONG position for {symbol}: 1 @ {price:.2f}")
+            else:
+                # Already long - do nothing
+                if self.debug:
+                    logger.debug(f"Ignoring BUY signal for {symbol}: already in LONG position")
+
+        # CASE 2: SELL signal
+        elif signal_value == SignalEvent.SELL:
+            # If currently long, close position first
+            if current_state == 1:
+                close_order = create_order_event(
+                    symbol=symbol,
+                    order_type="MARKET",
+                    direction="SELL",  # Sell to close long
+                    quantity=1,
+                    price=price,
+                    timestamp=timestamp
+                )
+
+                # Emit order to close long position
+                self._emit_order(close_order)
+                self.position_state[symbol] = 0  # Update to neutral
+
+                # Log position closure
+                if self.debug:
+                    logger.debug(f"Closed LONG position for {symbol}: 1 @ {price:.2f}")
+
+            # Now open short position if not already short
+            if current_state != -1:  # If not already short
+                short_order = create_order_event(
+                    symbol=symbol,
+                    order_type="MARKET",
+                    direction="SELL",
+                    quantity=1,
+                    price=price,
+                    timestamp=timestamp
+                )
+
+                # Emit order to open short position
+                if self._emit_order(short_order):
+                    self.position_state[symbol] = -1  # Mark as short
+                    if self.debug:
+                        logger.debug(f"Opened SHORT position for {symbol}: 1 @ {price:.2f}")
+            else:
+                # Already short - do nothing
+                if self.debug:
+                    logger.debug(f"Ignoring SELL signal for {symbol}: already in SHORT position")
+    
+
+    
+    def calculate_position_size(self, symbol, price, signal_strength=1.0):
+        """Always returns 1 share for position sizing."""
+        return 1
+
+    def _emit_order(self, order):
+        """
+        Emit order event and track it.
+        Returns success status.
+        """
+        if not order:
+            return False
+
+        # Add to order list for tracking
+        self.orders.append(order)
+
+        # Track success
+        success = False
+
+        try:
+            # Try event bus first
+            if self.event_bus:
+                if self.debug:
+                    logger.debug(f"Emitting order via event bus: {order.get_symbol()} {order.get_direction()}")
+                self.event_bus.emit(order)
+                success = True
+            # Direct broker placement as backup
+            elif self.broker:
+                if self.debug:
+                    logger.debug(f"Placing order with broker directly: {order.get_symbol()} {order.get_direction()}")
+                self.broker.place_order(order)
+                success = True
+            else:
+                logger.warning("No event bus or broker available - order not emitted!")
+        except Exception as e:
+            logger.error(f"Failed to emit order: {e}")
+            success = False
+
+        return success
+    
+    def reset(self):
+        """Reset the risk manager state."""
+        self.position_state = {}
+        self.orders = []        
