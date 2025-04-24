@@ -177,31 +177,59 @@ class TradeTracker:
             'total_pnl': total_pnl,
             'average_pnl': total_pnl / len(self.closed_trades) if self.closed_trades else 0
         }
-    
-    def liquidate_positions(self, timestamp, prices):
-        """Liquidate all open positions at specified prices."""
-        liquidation_pnl = 0.0
-        
-        for symbol, position in list(self.positions.items()):
-            price = prices.get(symbol)
-            if price is None:
+
+
+    def liquidate_positions(self, timestamp, market_prices):
+        """Liquidate all open positions."""
+        # Get open positions - make a copy to avoid modification during iteration
+        open_positions = dict(self.get_open_positions())
+        logger.debug(f"TradeTracker.liquidate_positions called with {len(open_positions)} open positions")
+
+        # Print each open position for debugging
+        for symbol, position in open_positions.items():
+            logger.debug(f"Open position: {symbol} - {position['quantity']} shares")
+
+        total_pnl = 0.0
+
+        # Close each position
+        for symbol, position in list(open_positions.items()):  # Use list() to create a copy for iteration
+            # Get price from market data or use cost basis
+            price = market_prices.get(symbol, position.get('cost_basis', 0.0))
+            quantity = position.get('quantity', 0)
+
+            if quantity == 0:
                 continue
-            
-            quantity = abs(position['quantity'])
-            direction = 'SELL' if position['quantity'] > 0 else 'BUY'
-            
-            # Create liquidation fill
-            fill = {
+
+            # Determine direction for closing
+            direction = "SELL" if quantity > 0 else "BUY"
+            quantity = abs(quantity)
+
+            # Calculate P&L
+            if direction == "SELL":
+                # Closing a long position
+                pnl = (price - position.get('cost_basis', 0.0)) * quantity
+            else:
+                # Closing a short position
+                pnl = (position.get('cost_basis', 0.0) - price) * quantity
+
+            # Add to total P&L
+            total_pnl += pnl
+
+            # Create fill data for this liquidation
+            fill_data = {
                 'timestamp': timestamp,
                 'symbol': symbol,
                 'direction': direction,
                 'quantity': quantity,
                 'price': price,
-                'commission': 0.0  # Often no commission on liquidation in backtest
+                'commission': 0.0,
+                'liquidation': True  # Mark as a liquidation fill
             }
-            
-            # Process the fill
-            pnl = self.process_fill(fill)
-            liquidation_pnl += pnl
-        
-        return liquidation_pnl
+
+            # Process this fill
+            self.process_fill(fill_data)
+
+            logger.info(f"Liquidated position: {symbol} {direction} {quantity} @ {price:.2f}, P&L: {pnl:.2f}")
+
+        return total_pnl
+

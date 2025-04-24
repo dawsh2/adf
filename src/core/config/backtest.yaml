@@ -1,0 +1,19 @@
+# config/backtest.yaml
+data:
+  source: csv
+  data_dir: ./data
+  
+strategies:
+  mean_reversion:
+    lookback: 20
+    z_threshold: 1.5
+    price_key: close
+    
+filters:
+  regime:
+    ma_window: 50
+    
+backtest:
+  initial_cash: 10000.0
+  slippage: 0.001
+  commission: 0.0
