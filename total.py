@@ -92,31 +92,35 @@ def test_order_fill_pipeline():
     return pipeline_working
 
 
-
+# Fix 1: Update the data loading function to ensure proper date handling
 def load_test_data(symbol='SAMPLE', start_date='2024-03-26', end_date='2024-04-26'):
     """Load historical data for testing."""
+    # Convert string dates to datetime objects with proper formatting
+    if isinstance(start_date, str):
+        start_date = pd.to_datetime(start_date)
+    if isinstance(end_date, str):
+        end_date = pd.to_datetime(end_date)
+    
     # Configure data directory
     data_dir = os.path.join('data')
     
     # Create CSV data source
-    from src.data.sources.csv_handler import CSVDataSource
     data_source = CSVDataSource(data_dir=data_dir)
     
-    # Create bar emitter
-    from src.core.events.event_emitters import BarEmitter
+    # Create event bus
     event_bus = EventBus()
+    
+    # Create bar emitter
     bar_emitter = BarEmitter(name="bar_emitter", event_bus=event_bus)
     
-    # Create data handler with the required arguments
-    data_handler = HistoricalDataHandler(data_source=data_source, bar_emitter=bar_emitter)
+    # Create data handler with proper setup
+    data_handler = HistoricalDataHandler(
+        data_source=data_source, 
+        bar_emitter=bar_emitter
+    )
     
-    # Load data (no need to call load_from_csv as it will use the data_source)
-    # Convert string dates to datetime if needed
-    start = pd.to_datetime(start_date) if isinstance(start_date, str) else start_date
-    end = pd.to_datetime(end_date) if isinstance(end_date, str) else end_date
-    
-    # Load data for the symbol
-    data_handler.load_data(symbols=[symbol], start_date=start, end_date=end)
+    # Load data for the symbol with explicit date handling
+    data_handler.load_data(symbols=[symbol], start_date=start_date, end_date=end_date)
     
     logger.info(f"Loaded data for {symbol} from {start_date} to {end_date}")
     return data_handler
@@ -354,38 +358,8 @@ def demo_walk_forward_optimization():
     """Demonstrate walk-forward optimization."""
     logger.info("\n===== WALK-FORWARD OPTIMIZATION DEMO =====\n")
     
-    # 1. Load market data - use a wider date range
-    data_handler = load_test_data(symbol='SAMPLE', start_date='2024-03-01', end_date='2024-04-30')
-    
-    # Check if data is available
-    symbol = data_handler.get_symbols()[0]
-    data_handler.reset()
-    
-    # Determine actual date range in the data
-    first_date = None
-    last_date = None
-    bar_count = 0
-    
-    while True:
-        bar = data_handler.get_next_bar(symbol)
-        if bar is None:
-            break
-            
-        date = bar.get_timestamp()
-        if first_date is None:
-            first_date = date
-        last_date = date
-        bar_count += 1
-    
-    # Reset data handler
-    data_handler.reset()
-    
-    logger.info(f"Available data: {bar_count} bars from {first_date} to {last_date}")
-    
-    # If no data is available, return early
-    if bar_count == 0:
-        logger.error("No data available for walk-forward optimization")
-        return None, None
+    # 1. Load market data
+    data_handler = load_test_data(symbol='SAMPLE')
     
     # 2. Create strategy
     ma_strategy = MovingAverageCrossoverStrategy(
@@ -407,17 +381,21 @@ def demo_walk_forward_optimization():
         'slow_window': [20, 30, 40, 50]
     }
     
-    # 6. Run walk-forward optimization with the actual date range
+    # Add constraint to ensure fast_window < slow_window
+    def window_constraint(params):
+        return params['fast_window'] < params['slow_window']
+    
+    # 6. Run walk-forward optimization
     logger.info("Running walk-forward optimization...")
     wf_result = manager.optimize_component(
         target_name="ma_strategy",
         optimizer_name="walk_forward",
         evaluator_name="sharpe_ratio",
         param_space=param_space,
+        constraints=[window_constraint],  # Add the constraint
         data_handler=data_handler,
-        # Use actual date range instead of fixed strings
-        start_date=first_date,
-        end_date=last_date,
+        start_date='2024-03-26',
+        end_date='2024-04-26',
         windows=3,  # Use 3 windows for the demo
         train_size=0.7,
         test_size=0.3
